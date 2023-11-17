@@ -22,7 +22,7 @@
       <img src="ReadME/mir-logo.png" alt="Sponsor Logo" height="100">
     </a>
     <br />
-    <a href="https://github.com/olanrewajufarooq/AssignmentTemplate">View Project Files »</a>
+    <a href="https://github.com/olanrewajufarooq/LocalizationCV">View Project Files »</a>
     <br />
   </p>
 </div>
@@ -70,15 +70,15 @@ Provide details of results here (if available).
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/olanrewajufarooq/AssignmentTemplate.svg?style=for-the-badge
-[contributors-url]: https://github.com/olanrewajufarooq/AssignmentTemplate/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/olanrewajufarooq/AssignmentTemplate.svg?style=for-the-badge
+[contributors-shield]: https://img.shields.io/github/contributors/olanrewajufarooq/LocalizationCV.svg?style=for-the-badge
+[contributors-url]: https://github.com/olanrewajufarooq/LocalizationCV/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/olanrewajufarooq/LocalizationCV.svg?style=for-the-badge
 [forks-url]: https://github.com/olanrewajufarooq/AssignmentTemplate/network/members
-[stars-shield]: https://img.shields.io/github/stars/olanrewajufarooq/AssignmentTemplate.svg?style=for-the-badge
-[stars-url]: https://github.com/olanrewajufarooq/AssignmentTemplate/stargazers
-[issues-shield]: https://img.shields.io/github/issues/olanrewajufarooq/AssignmentTemplate.svg?style=for-the-badge
-[issues-url]: https://github.com/olanrewajufarooq/AssignmentTemplate/issues
-[license-shield]: https://img.shields.io/github/license/olanrewajufarooq/AssignmentTemplate.svg?style=for-the-badge
-[license-url]: https://github.com/olanrewajufarooq/AssignmentTemplate/blob/main/LICENSE
+[stars-shield]: https://img.shields.io/github/stars/olanrewajufarooq/LocalizationCV.svg?style=for-the-badge
+[stars-url]: https://github.com/olanrewajufarooq/LocalizationCV/stargazers
+[issues-shield]: https://img.shields.io/github/issues/olanrewajufarooq/LocalizationCV.svg?style=for-the-badge
+[issues-url]: https://github.com/olanrewajufarooq/LocalizationCV/issues
+[license-shield]: https://img.shields.io/github/license/olanrewajufarooq/LocalizationCV.svg?style=for-the-badge
+[license-url]: https://github.com/olanrewajufarooq/LocalizationCV/blob/main/LICENSE
 [linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
 [linkedin-url]: https://linkedin.com/in/olanrewajufarooq
