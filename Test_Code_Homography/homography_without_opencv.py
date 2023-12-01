@@ -100,6 +100,10 @@ image1 = np.array(image1)
 image2 = np.array(image2)
 
 #height and width of images
+'''
+took help from https://github.com/ZohebAbai/mobile_sensing_robotics/blob/main/Visual_Features_RANSAC.ipynb
+to stitch the images
+'''
 width = image1.shape[1] + image2.shape[1]
 height = image1.shape[0] + image2.shape[0]
 # Warp image 1 to image 2
