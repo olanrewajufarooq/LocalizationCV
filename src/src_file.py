@@ -1,8 +1,6 @@
 import numpy as np
 from scipy.io import loadmat, savemat
-import PIL
-import cv2
-import argparse
+import PIL, cv2, argparse, h5py, pickle
 
 # Class for Computing Homography
 class Homography:
@@ -25,13 +23,109 @@ class Homography:
 class FeatureExtraction:
     """This is a class to perform feature extraction on images
     """
-    def __init__(self):
-        pass
+    def __init__(self, method = "SIFT", n_keypoints=0, verbose=False):
+        self.method = method
+        self.n_keypoints = n_keypoints
+        self.verbose = verbose
+        
+        if self.method == "SIFT":
+            if self.verbose:
+                print("Initializing SIFT Feature Detector... ", end=" ")
+            
+            # Initialize SIFT detector
+            self.extractor = cv2.SIFT_create(
+                nfeatures=n_keypoints,  # Set to 0 to disable limiting the number of keypoints
+                # nOctaveLayers=3, # Number of layers in each octave of the image. Default: 3. (Automatically determined by image size)
+                contrastThreshold=0.04, # If contrast of keypoint below this threshold, won't be detected. Default: 0.04
+                edgeThreshold=10, #  If difference in intensity between keypoint and surrounding pixels below threshold, keypoint rejected. Default: 10
+                sigma=1.6 # S.D. of Gaussian on first octave. Default: 1.6
+            )
+            
+            if self.verbose:
+                print("Successful")
+    
+    def _extract_features_sift(self, image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        keypoints, descriptors = self.extractor.detectAndCompute(gray, None)
+        
+        # Extracting the X and Y points from the KeyPoint Object
+        keypoints = np.array( [ (kp.pt[0], kp.pt[1]) for kp in keypoints ] )
+        
+        # Verification of Data
+        assert keypoints.shape[0] == descriptors.shape[0], "Inconsistency. Amount of features must be equal to the amount of descriptors" + \
+            f"\n Obtained: Keypoint Shape - {keypoints.shape}. Descriptors Shape - {descriptors.shape} "
+        assert keypoints.shape[1] == 2, f"Inconsistency in the size of keypoints. Obtained: {keypoints.shape}"
+        assert descriptors.shape[1] == 128, f"Inconsistency in the size of descriptors. Obtained: {descriptors.shape}"
+        
+        return np.vstack((keypoints.T, descriptors.T))
+    
+    def extract_features(self, file_path, type="image"):
+        
+        if self.verbose:
+            if type == "video":
+                print(f"Loading video ({file_path}) to memory...", end=" ")
+            elif type == "image":  
+                print(f"Loading image ({file_path}) to memory...", end=" ")
+        
+        # Reading the file
+        if type == "video":
+            video = cv2.VideoCapture(file_path)
+            assert video.isOpened(), f"Video not opened. Filepath: {file_path}"
+            n_video_frames = int( video.get(cv2.CAP_PROP_FRAME_COUNT) )
+        elif type == "image":
+            image = cv2.imread(file_path)
+        
+        if self.verbose:
+            print("Successful")
+            if type == "video":
+                print(f"Number of Frames in Video: {n_video_frames}")
+            print("Extracting features from frames...", end=" ")
+        
+        features = []
+        
+        while True:
+            
+            # If the file is a video, break the loop after all frames are read
+            if type == "video":  
+                ret, image = video.read()
+                if not ret:
+                    break
+            
+            # Performing Feature Extraction
+            if self.method == "SIFT":
+                features.append( self._extract_features_sift(image) )
+            
+            # If the file is an image, break the loop after one iteration
+            if type == "image":
+                break
+            
+            # Press 'q' to exit the loop
+            # if cv2.waitKey(1) & 0xFF == ord('q'):
+            #     break
+        
+        # Checking for consistency in the amount of features obtained
+        if type == "video":
+            assert len(features) == n_video_frames, f"Inconsistency: Amount of features obtained ({len(features)}) does not equate the amount of frames in video ({n_video_frames})."
+            
+        if self.verbose:
+            print("Successful")
+
+        # Closing opened files
+        if type == "video":
+            video.release()
+        
+        cv2.destroyAllWindows()
+        
+        return features
 
 # Class for Running Solutions
-class Solution:
-    def __init__(self, config_path):
+class ConfigParser:
+    def __init__(self, config_path, verbose=False):
         self.config_path = config_path
+        self.verbose = verbose
+        
+        if self.verbose:
+            print("Reading config file...", end=" ")
         
         self.data_reading = {}
         self.read_config()
@@ -39,6 +133,9 @@ class Solution:
         self.config_dict = {}
         self.parse_config_data()
         
+        if self.verbose:
+            print("Successful",)
+    
     def read_config(self):
         """Reading the config file using the code provided by instructor.
         """
@@ -53,8 +150,6 @@ class Solution:
 
                 # Split the line into tokens
                 tokens = line.split()
-                
-                print(tokens)
 
                 # Extract parameter names and values
                 param_name = tokens[0]
@@ -69,8 +164,10 @@ class Solution:
                     self.data_reading[param_name] = param_values
     
     def parse_config_data(self):
-        # Parsing Video
-        self.config_dict["videos"] = self.data_reading["videos"][0]
+        """Parsing the read data to a format usable for the project.
+        """
+        # Parsing Video Filenames
+        self.config_dict["videos"] = self.data_reading["videos"][0][0]
 
         # Parsing Points in Maps and Features
         self.config_dict["map_dtypes"] = []
@@ -85,7 +182,7 @@ class Solution:
             dtype = pt_in_map[0]
             frame_id = pt_in_frame[0]
             
-            # assert (type(int(pt_in_frame[0])) == int) and (float(pt_in_frame[0]) == int(pt_in_frame[0])), f"The Frame ID should be an integer. Given: {pt_in_frame[0]}"
+            assert (type(int(pt_in_frame[0])) == int) and (float(pt_in_frame[0]) == int(pt_in_frame[0])), f"The Frame ID should be an integer. Given: {pt_in_frame[0]}"
             
             map_points = []
             frame_points = []
@@ -115,12 +212,44 @@ class Solution:
             self.config_dict["map_points"].append(map_points)
             self.config_dict["frame_points"].append(frame_points)
 
-        # Parsing the Map Image
+        # Parsing Other Parameters
         self.config_dict["image_map"] = self.data_reading["image_map"][0][0]
-        self.config_dict["keypoints_out"] = self.data_reading["keypoints_out"][0][0]
-        self.config_dict["transforms_out"] = self.data_reading["transforms_out"][0][0]
+        
+        # Parsing the Keypoint Output Path and Extension
+        keypoints_out= self.data_reading["keypoints_out"][0][0].split(".")
+        self.config_dict["keypoints_out_path"] = keypoints_out[0]
+        self.config_dict["keypoints_out_ext"] = keypoints_out[1]
+        
+        # Parsing the Transformation Output Path and Extension
+        transforms_out= self.data_reading["transforms_out"][0][0].split(".")
+        self.config_dict["transforms_out_path"] = transforms_out[0]
+        self.config_dict["transforms_out_ext"] = transforms_out[1]
 
+        # Saving the specified Transformation Method
         self.config_dict["transforms"] = self.data_reading["transforms"][0][1]
+    
+    def save_features(self, features):
+        
+        if self.verbose:
+            print(f"Saving features as .{self.config_dict['keypoints_out_ext']} file...", end=" ")
+            
+        # Saving as MATLAB file
+        if self.config_dict["keypoints_out_ext"] == "mat":
+            savemat( self.config_dict['keypoints_out_path'], features, oned_as='cell' )
+        
+        # Saving as HDF5 file
+        elif self.config_dict["keypoints_out_ext"] == "h5":
+            with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'w') as file:
+                for frame, feature in enumerate(features):
+                    file.create_dataset(frame, data=feature)
+        
+        # Saving as Pickle file
+        elif self.config_dict["keypoints_out_ext"] == "pkl":
+            with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'wb') as file:
+                pickle.dump(features, file)
+        
+        if self.verbose:
+            print("Successful")
 
 
 # Function to parse arguments from Command Line
@@ -136,9 +265,23 @@ def parse_args():
     parser.add_argument('config_file_path', type=str,
                         help='path of the configuration file')
     
+    parser.add_argument('--verbose', '-v', action='store_true', default=False,
+                        help='enable verbose mode')
+    
     return parser.parse_args()
 
 if __name__ == '__main__':
-    args = parse_args() #Read arguments passed on the command line
+    cmd_args = parse_args() #Read arguments passed on the command line
+    parser = ConfigParser(config_path = cmd_args.config_file_path, verbose=cmd_args.verbose)
     
-    sol = Solution(args.config_file_path)
+    feat_extract = FeatureExtraction(method="SIFT", verbose=cmd_args.verbose)
+    
+    # Extracting Features from Image Map
+    features = feat_extract.extract_features(parser.config_dict["image_map"], type="image")
+    
+    # Extracting Features from video files (Only One Video Accepted)
+    features_video = feat_extract.extract_features(parser.config_dict["videos"], type="video")
+    features.extend(features_video)
+    
+    parser.save_features(features)
+    
