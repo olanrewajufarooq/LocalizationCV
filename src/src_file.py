@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.io import loadmat, savemat
 import PIL, cv2, argparse, h5py, pickle
+from sklearn.neighbors import NearestNeighbors
 
 # Class for Computing Homography
 class Homography:
@@ -117,6 +118,108 @@ class FeatureExtraction:
         cv2.destroyAllWindows()
         
         return features
+
+# Class for Feature Matching
+class FeatureMatching:
+    def __init__(self, lib="opencv", verbose=False):
+        self.lib = lib # Options: "opencv", "sklearn"
+        self.verbose = verbose
+    
+    def match_features(self, features, map="first", match_threshold=0.75):
+        if self.verbose:
+            print("Matching features...", end=" ")
+        
+        # Extracting the features of the map and frames
+        if map == "first":
+            features_map = features[0]
+            features_frames = features[1:5]
+        elif map == "last":
+            features_map = features[-1]
+            features_frames = features[:-1]
+        
+        if self.lib == "opencv":
+            pts_in_map, pts_in_frame, features_match_objects = self._cv_feature_matching(features_map, features_frames, match_threshold=match_threshold)
+        elif self.lib == "sklearn":
+            pts_in_map, pts_in_frame = self._knn_feature_matching(features_map, features_frames, match_threshold=match_threshold)
+        
+        assert len(pts_in_map) == len(pts_in_frame), f"Inconsistency in matching algorithm. Expected length equal length \nMap: {len(pts_in_map)}. Frame: {len(pts_in_frame)}"
+        
+        if self.verbose:
+            print("Successful")
+            
+        return pts_in_map, pts_in_frame
+    
+    def _knn_feature_matching(self, features_map, features_frames, match_threshold=0.75):
+        map_descriptor = features_map[2:].T.astype(np.uint8)
+        
+        pts_in_map = []
+        pts_in_frame = []
+        
+        knn = NearestNeighbors(n_neighbors=2, algorithm='ball_tree').fit(map_descriptor)
+            
+        for feature in features_frames:
+                
+                # Extracting the descriptors of the frame
+                frame_descriptor = feature[2:].T.astype(np.uint8)
+                
+                # Checking for consistencies in the descriptors
+                assert map_descriptor.shape[1] == frame_descriptor.shape[1], f"Inconsistency in the size of descriptor. \nMap: {map_descriptor.shape[1]}. Frame: {frame_descriptor.shape[1]}"
+                
+                distances, indices = knn.kneighbors(frame_descriptor)
+                
+                accepted_pt_in_map = []
+                accepted_pt_in_frame = []
+                
+                for i, d in enumerate(distances):
+                    if d[0] < match_threshold * d[1]:
+                        accepted_pt_in_map.append( tuple(features_map[:2, indices[i][0]]) ) # indices[i][0] is the index of the best match for the i-th feature in the frame
+                        accepted_pt_in_frame.append( tuple(feature[:2, i]) ) # i is the index of the i-th feature in the frame
+                
+                pts_in_map.append( accepted_pt_in_map )
+                pts_in_frame.append( accepted_pt_in_frame )
+                
+        return pts_in_map, pts_in_frame
+    
+    def _cv_feature_matching(self, features_map, features_frames, match_threshold=0.75):
+        # Extracting the keypoints and descriptors of the map
+        map_descriptor = features_map[2:].T.astype(np.uint8)
+        
+        pts_in_map = []
+        pts_in_frame = []
+        
+        bf = cv2.BFMatcher() # Brute Force Matcher
+        
+        features_match_objects = [ ]
+            
+        for feature in features_frames:
+            
+            # Extracting the descriptors of the frame
+            frame_descriptor = feature[2:].T.astype(np.uint8)
+            
+            # Checking for consistencies in the descriptors
+            assert map_descriptor.shape[1] == frame_descriptor.shape[1], f"Inconsistency in the size of descriptor. \nMap: {map_descriptor.shape[1]}. Frame: {frame_descriptor.shape[1]}"
+            
+            matches = bf.knnMatch(map_descriptor, frame_descriptor, k=2) # map_descriptor is the query descriptor and frame_descriptor is the train descriptor.
+            # The knnMatch function returns the two best matches for each descriptor.
+            # Hence, later we will need to filter the matches to only keep the best ones.
+            
+            accepted_pt_in_map = []
+            accepted_pt_in_frame = []
+            
+            accepted_matches = []
+            
+            for m, n in matches: # m and n are the two best matches from the frame descriptor
+                if m.distance < match_threshold * n.distance:
+                    accepted_pt_in_map.append( tuple(features_map[:2, m.queryIdx]) )
+                    accepted_pt_in_frame.append( tuple(feature[:2, m.trainIdx]) )
+                    accepted_matches.append(m)
+            
+            pts_in_map.append( accepted_pt_in_map )
+            pts_in_frame.append( accepted_pt_in_frame )
+            features_match_objects.append(accepted_matches)
+        
+        return pts_in_map, pts_in_frame, features_match_objects
+
 
 # Class for Running Solutions
 class ConfigParser:
@@ -241,7 +344,7 @@ class ConfigParser:
         elif self.config_dict["keypoints_out_ext"] == "h5":
             with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'w') as file:
                 for frame, feature in enumerate(features):
-                    file.create_dataset(frame, data=feature)
+                    file.create_dataset(f"{frame}", data=feature)
         
         # Saving as Pickle file
         elif self.config_dict["keypoints_out_ext"] == "pkl":
@@ -250,6 +353,32 @@ class ConfigParser:
         
         if self.verbose:
             print("Successful")
+            
+    def load_features(self):
+            
+            if self.verbose:
+                print(f"Loading features from .{self.config_dict['keypoints_out_ext']} file...", end=" ")
+            
+            # Loading from MATLAB file
+            if self.config_dict["keypoints_out_ext"] == "mat":
+                features = loadmat( self.config_dict['keypoints_out_path'] )
+            
+            # Loading from HDF5 file
+            elif self.config_dict["keypoints_out_ext"] == "h5":
+                with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'r') as file:
+                    features = []
+                    for frame in file:
+                        features.append( file[frame][()] )
+            
+            # Loading from Pickle file
+            elif self.config_dict["keypoints_out_ext"] == "pkl":
+                with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'rb') as file:
+                    features = pickle.load(file)
+            
+            if self.verbose:
+                print("Successful")
+            
+            return features
 
 
 # Function to parse arguments from Command Line
@@ -274,14 +403,11 @@ if __name__ == '__main__':
     cmd_args = parse_args() #Read arguments passed on the command line
     parser = ConfigParser(config_path = cmd_args.config_file_path, verbose=cmd_args.verbose)
     
-    feat_extract = FeatureExtraction(method="SIFT", verbose=cmd_args.verbose)
+    # Loading extracted features
+    features = parser.load_features()
     
-    # Extracting Features from Image Map
-    features = feat_extract.extract_features(parser.config_dict["image_map"], type="image")
+    # Matching Features
+    feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose)
+    pts_in_map, pts_in_frame = feat_match.match_features(features)
     
-    # Extracting Features from video files (Only One Video Accepted)
-    features_video = feat_extract.extract_features(parser.config_dict["videos"], type="video")
-    features.extend(features_video)
-    
-    parser.save_features(features)
-    
+    print(pts_in_map, pts_in_frame)
