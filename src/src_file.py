@@ -79,7 +79,8 @@ class FeatureExtraction:
         if self.verbose:
             print("Successful")
             if type == "video":
-                print(f"Number of Frames in Video: {n_video_frames}")
+                frame_rate = video.get(cv2.CAP_PROP_FPS)
+                print(f"Number of Frames in Video: {n_video_frames}. Frame Rate: {frame_rate}")
             print("Extracting features from frames...", end=" ")
         
         features = []
