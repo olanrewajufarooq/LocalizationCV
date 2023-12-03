@@ -132,7 +132,7 @@ class FeatureMatching:
         # Extracting the features of the map and frames
         if map == "first":
             features_map = features[0]
-            features_frames = features[1:5]
+            features_frames = features[1:5] # TO DO: Change this later to include all frames
         elif map == "last":
             features_map = features[-1]
             features_frames = features[:-1]
