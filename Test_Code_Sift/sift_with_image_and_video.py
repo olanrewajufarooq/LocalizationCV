@@ -104,7 +104,7 @@ while True:
     print(f"Number of matches : {len(matches)}")
     # Draw matches
     # matched_frame = cv2.drawMatchesKnn(fixed_image, fixed_keypoints, frame, frame_keypoints, matches, None, flags=2, matchColor=(0,255,0))
-    #Matched frame between fixed image and current frame
+    #Matched frame between fixed image and current frame using the SKLEARN method
     matched_frame = draw_matches(fixed_image, fixed_keypoints, frame, frame_keypoints, matches)
     #To save the video uncomment the following line
     # out.write(matched_frame)
