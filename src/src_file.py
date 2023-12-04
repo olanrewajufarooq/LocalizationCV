@@ -119,11 +119,17 @@ class Homography:
         return H_output
     
     def compute_homography(self, pts_in_map, pts_in_frame, frame_ids):
+        if self.verbose:
+            print(f"Computing Homography. Use Ransac: {self.use_ransac}. Use OpenCV: {self.use_opencv}. Type: {self.transforms}...", end=" ")
+        
         if self.transforms == "map":
             H_output = self._compute_homography_map(pts_in_map, pts_in_frame, frame_ids)
         elif self.transforms == "all":
             # TODO: Implement the code to compute homography for all frames.
             pass
+        
+        if self.verbose:
+            print("Successful")
         
         return H_output
 
@@ -242,7 +248,7 @@ class FeatureMatching:
         # Extracting the features of the map and frames
         if map == "first":
             features_map = features[0]
-            features_frames = features[1:5] # TODO: Change this later to include all frames
+            features_frames = features[1:]
         elif map == "last":
             features_map = features[-1]
             features_frames = features[:-1]
@@ -489,6 +495,29 @@ class ConfigParser:
             print("Successful")
         
         return features
+    
+    def save_homography_output(self, homo_matrix):
+        
+        if self.verbose:
+            print(f"Saving homography matrices as .{self.config_dict['transforms_out_ext']} file...", end=" ")
+            
+        # Saving as MATLAB file
+        if self.config_dict["transforms_out_ext"] == "mat":
+            savemat( self.config_dict['transforms_out_path'], {"H": homo_matrix} )
+        
+        # Saving as HDF5 file
+        elif self.config_dict["transforms_out_ext"] == "h5":
+            with h5py.File(f"{self.config_dict['transforms_out_path']}.h5", 'w') as file:
+                file.create_dataset("H", data=homo_matrix)
+        
+        # Saving as Pickle file
+        elif self.config_dict["transforms_out_ext"] == "pkl":
+            with open(f"{self.config_dict['transforms_out_path']}.pkl", 'wb') as file:
+                pickle.dump(homo_matrix, file)
+        
+        if self.verbose:
+            print("Successful")
+        
 
 
 # Function to parse arguments from Command Line
@@ -519,6 +548,10 @@ if __name__ == '__main__':
     # Matching Features
     feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose)
     pts_in_map, pts_in_frame = feat_match.match_features(features)
+    frame_ids = list( range(1, len(pts_in_frame)+1) )
     
     # Computing Homography
     homography = Homography(transforms="map", use_ransac=True, verbose=cmd_args.verbose)
+    homo_output_matrix = homography.compute_homography( pts_in_map, pts_in_frame, frame_ids )
+    # homo_output = homography.compute_homography(parser.config_dict["map_points"], parser.config_dict["frame_points"], parser.config_dict["frame_ids"])
+    parser.save_homography_output(homo_output_matrix)
