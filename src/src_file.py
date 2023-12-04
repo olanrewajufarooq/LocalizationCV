@@ -1,6 +1,10 @@
+import argparse
+import pickle
+import h5py
 import numpy as np
+import PIL
+import cv2
 from scipy.io import loadmat, savemat
-import PIL, cv2, argparse, h5py, pickle
 from sklearn.neighbors import NearestNeighbors
 
 # Class for Computing Homography
@@ -8,18 +12,122 @@ class Homography:
     """This is a class strictly for computing homoegraphy.
     
     It involves a function to compute homography between only two images.
-    Either with or without RANSAC.    
+    Either with or without RANSAC.
     """
     
-    def __init__(self):
-        pass
+    def __init__(self, transforms = "map", use_ransac = True, use_opencv=True, verbose=False):
+        self.transforms = transforms
+        self.use_ransac = use_ransac
+        self.verbose = verbose
+        self.use_opencv = use_opencv
+        
+        if self.use_ransac:
+            self.n_iterations = 35 # TODO: Implement the code to calculate the number of iterations.
     
-    def compute_homography(self):
-        pass
+    def _compute_homography_without_cv(self, input_points, output_points):
+        
+        # Checking for consistency in the amount of points
+        assert (len(input_points) >= 4) and (len(output_points) >= 4), "At least 4 points are required to compute homography."
+        assert len(input_points) == len(output_points), "Point arrays must have the same number of points."
+
+        # Build the matrix A for the homography calculation
+        A = []
+        
+        for point1, point2 in zip(input_points, output_points):
+            x_in, y_in = point1
+            x_out, y_out = point2
+            A.append([x_in , y_in, 1, 0, 0, 0, -x_out*x_in, -x_out*y_in, -x_out])
+            A.append([0, 0, 0, x_in, y_in, 1, -y_out*x_in, -y_out*y_in, -y_out])
+        
+        A = np.array(A,dtype=np.double)
+        eig_values , eig_vectors = np.linalg.eig(A.T @ A)
+
+        min_eig_value = np.argmin(eig_values)
+        min_eig_value_index = np.unravel_index(min_eig_value, eig_values.shape)
+        H_array = eig_vectors[:,min_eig_value_index].reshape(-1,1)
+        
+        return H_array / H_array[-1]
     
-    def run_ransac(self):
-        pass
+    def _run_ransac(self, input_points, output_points):
+        # Checking for consistency in the amount of points
+        assert (len(input_points) >= 4) and (len(output_points) >= 4), "At least 4 points are required to compute homography."
+        assert len(input_points) == len(output_points), "Point arrays must have the same number of points."
+        
+        n_inliers = []
+        inliers_idx = []
+        
+        for _ in range(self.n_iterations):
+            # Randomly select 4 points from the input and output points
+            random_indices = np.random.choice(len(input_points), 4, replace=False)
+            input_points_random = input_points[random_indices]
+            output_points_random = output_points[random_indices]
+            
+            # Compute the homography using the 4 points
+            H = self._compute_homography_without_cv(input_points_random, output_points_random)
+            
+            # Compute the number of inliers
+            n_inlier = 0
+            inlier_idx = []
+            for i, (input_point, output_point) in enumerate(zip(input_points, output_points)):
+                input_point = np.append(input_point, 1)
+                output_point = np.append(output_point, 1)
+                output_point_pred = H @ input_point
+                output_point_pred /= output_point_pred[-1]
+                
+                if np.linalg.norm(output_point_pred - output_point) < 5:
+                    n_inlier += 1
+                    inlier_idx.append( i )
+                
+            n_inliers.append(n_inlier)
+            inliers_idx.append(inlier_idx)
+        
+        # Select the best homography
+        best_homo_index = np.argmax(n_inliers)
+        best_points = inliers_idx[best_homo_index]
+        
+        best_inputs = np.array(input_points)[best_points]
+        best_outputs = np.array(output_points)[best_points]
+        
+        best_H_array = self._compute_homography_without_cv(best_inputs, best_outputs)
+        
+        return best_H_array
     
+    def _compute_homography_map(self, pts_in_map, pts_in_frame, frame_ids):
+        
+        H_output_arrays = []
+        
+        for output_points, input_points, frame_id in zip(pts_in_map, pts_in_frame, frame_ids):
+            if self.use_opencv:
+                # TODO: Implement OpenCV here.
+                pass
+            else:
+                # Computing the homography matrix without using OpenCV
+                if self.use_ransac:
+                    H_array = self._run_ransac(input_points=input_points, output_points=output_points)
+                else:
+                    H_array = self._compute_homography_without_cv(input_points=input_points, output_points=output_points)
+                
+                assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
+                
+                # Stacking the frame id to the homography array
+                H_output_array = np.vstack( (np.array([0, frame_id]).reshape(-1, 1), H_array) )
+                H_output_arrays.append(H_output_array)
+        
+        # Stacking the homography outputs.
+        H_output = np.hstack(H_output_arrays)
+        
+        return H_output
+    
+    def compute_homography(self, pts_in_map, pts_in_frame, frame_ids):
+        if self.transforms == "map":
+            H_output = self._compute_homography_map(pts_in_map, pts_in_frame, frame_ids)
+        elif self.transforms == "all":
+            # TODO: Implement the code to compute homography for all frames.
+            pass
+        
+        return H_output
+
+
 # Class for Extracting Features in an Image
 class FeatureExtraction:
     """This is a class to perform feature extraction on images
@@ -120,6 +228,7 @@ class FeatureExtraction:
         
         return features
 
+
 # Class for Feature Matching
 class FeatureMatching:
     def __init__(self, lib="opencv", verbose=False):
@@ -133,7 +242,7 @@ class FeatureMatching:
         # Extracting the features of the map and frames
         if map == "first":
             features_map = features[0]
-            features_frames = features[1:5] # TO DO: Change this later to include all frames
+            features_frames = features[1:5] # TODO: Change this later to include all frames
         elif map == "last":
             features_map = features[-1]
             features_frames = features[:-1]
@@ -222,7 +331,7 @@ class FeatureMatching:
         return pts_in_map, pts_in_frame, features_match_objects
 
 
-# Class for Running Solutions
+# Class for Running Solutions and Parsing Data
 class ConfigParser:
     def __init__(self, config_path, verbose=False):
         self.config_path = config_path
@@ -304,7 +413,7 @@ class ConfigParser:
                     
                     map_points.append( (x_map, y_map) )
                     frame_points.append( (x_frame, y_frame) )
-                # TO DO: Codes for other data types can be implemented here later. For example: distances.
+                # TODO: Codes for other data types can be implemented here later. For example: distances.
                 
                 count += 1
                 
@@ -357,29 +466,29 @@ class ConfigParser:
             
     def load_features(self):
             
-            if self.verbose:
-                print(f"Loading features from .{self.config_dict['keypoints_out_ext']} file...", end=" ")
-            
-            # Loading from MATLAB file
-            if self.config_dict["keypoints_out_ext"] == "mat":
-                features = loadmat( self.config_dict['keypoints_out_path'] )
-            
-            # Loading from HDF5 file
-            elif self.config_dict["keypoints_out_ext"] == "h5":
-                with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'r') as file:
-                    features = []
-                    for frame in file:
-                        features.append( file[frame][()] )
-            
-            # Loading from Pickle file
-            elif self.config_dict["keypoints_out_ext"] == "pkl":
-                with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'rb') as file:
-                    features = pickle.load(file)
-            
-            if self.verbose:
-                print("Successful")
-            
-            return features
+        if self.verbose:
+            print(f"Loading features from .{self.config_dict['keypoints_out_ext']} file...", end=" ")
+        
+        # Loading from MATLAB file
+        if self.config_dict["keypoints_out_ext"] == "mat":
+            features = loadmat( self.config_dict['keypoints_out_path'] )
+        
+        # Loading from HDF5 file
+        elif self.config_dict["keypoints_out_ext"] == "h5":
+            with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'r') as file:
+                features = []
+                for frame in file:
+                    features.append( file[frame][()] )
+        
+        # Loading from Pickle file
+        elif self.config_dict["keypoints_out_ext"] == "pkl":
+            with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'rb') as file:
+                features = pickle.load(file)
+        
+        if self.verbose:
+            print("Successful")
+        
+        return features
 
 
 # Function to parse arguments from Command Line
@@ -411,4 +520,5 @@ if __name__ == '__main__':
     feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose)
     pts_in_map, pts_in_frame = feat_match.match_features(features)
     
-    print(pts_in_map, pts_in_frame)
+    # Computing Homography
+    homography = Homography(transforms="map", use_ransac=True, verbose=cmd_args.verbose)
