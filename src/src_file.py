@@ -69,59 +69,7 @@ class Homography:
             video.release()
             cv2.destroyAllWindows()
             print("Done")
-    
-    def create_mosaic(self, video_path, homography_matrices, frame_ids):
-        print("Creating Mosaic...", end=" ")
-
-        # Open the video file
-        video = cv2.VideoCapture(video_path)
-        assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
-
-        # Initialize an empty list to store transformed images
-        transformed_images = []
-
-        for frame_id in frame_ids:
-            # Find the column in the homography matrix corresponding to this frame_id
-            col_index = np.where(homography_matrices[1] == frame_id)[0][0]
             
-            # Extract the 3x3 homography matrix
-            H = homography_matrices[2:, col_index].reshape(3, 3)
-
-            # Set the video to the specific frame
-            video.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
-            
-            # Read the frame
-            ret, frame_image = video.read()
-            assert ret, f"Failed to read frame at ID {frame_id}"
-
-            # Apply homography to transform the frame image
-            transformed_image = cv2.warpPerspective(frame_image, H, (frame_image.shape[1], frame_image.shape[0]))
-            transformed_images.append(transformed_image)
-
-        # Close the video file
-        video.release()
-
-        # Calculate the total width and height of the mosaic
-        total_width = sum(image.shape[1] for image in transformed_images)
-        max_height = max(image.shape[0] for image in transformed_images)
-
-        # Create a blank image to hold the mosaic
-        mosaic = np.zeros((max_height, total_width, 3), dtype=np.uint8)
-
-        # Place each transformed image in the mosaic
-        current_x = 0
-        for image in transformed_images:
-            mosaic[0:image.shape[0], current_x:current_x + image.shape[1]] = image
-            current_x += image.shape[1]
-
-        # Show the mosaic
-        cv2.imshow("Mosaic", mosaic)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        print("Done")
-
-        return mosaic
-
     def _compute_homography_without_cv(self, input_points, output_points):
         
         # Checking for consistency in the amount of points
