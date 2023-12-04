@@ -15,11 +15,12 @@ class Homography:
     Either with or without RANSAC.
     """
     
-    def __init__(self, transforms = "map", use_ransac = True, use_opencv=True, verbose=False):
+    def __init__(self, transforms = "map", use_ransac = True, use_opencv=True, verbose=False, visualize=False):
         self.transforms = transforms
         self.use_ransac = use_ransac
         self.verbose = verbose
         self.use_opencv = use_opencv
+        self.visualize = visualize
         
         if self.use_ransac:
             self.n_iterations = 35 # TODO: Implement the code to calculate the number of iterations.
@@ -59,8 +60,8 @@ class Homography:
         for _ in range(self.n_iterations):
             # Randomly select 4 points from the input and output points
             random_indices = np.random.choice(len(input_points), 4, replace=False)
-            input_points_random = input_points[random_indices]
-            output_points_random = output_points[random_indices]
+            input_points_random = np.array(input_points, dtype=object)[random_indices].tolist()
+            output_points_random = np.array(output_points, dtype=object)[random_indices].tolist()
             
             # Compute the homography using the 4 points
             H = self._compute_homography_without_cv(input_points_random, output_points_random)
@@ -71,7 +72,7 @@ class Homography:
             for i, (input_point, output_point) in enumerate(zip(input_points, output_points)):
                 input_point = np.append(input_point, 1)
                 output_point = np.append(output_point, 1)
-                output_point_pred = H @ input_point
+                output_point_pred = H.reshape(3, 3) @ input_point
                 output_point_pred /= output_point_pred[-1]
                 
                 if np.linalg.norm(output_point_pred - output_point) < 5:
@@ -85,8 +86,8 @@ class Homography:
         best_homo_index = np.argmax(n_inliers)
         best_points = inliers_idx[best_homo_index]
         
-        best_inputs = np.array(input_points)[best_points]
-        best_outputs = np.array(output_points)[best_points]
+        best_inputs = np.array(input_points)[best_points].tolist()
+        best_outputs = np.array(output_points)[best_points].tolist()
         
         best_H_array = self._compute_homography_without_cv(best_inputs, best_outputs)
         
@@ -138,10 +139,11 @@ class Homography:
 class FeatureExtraction:
     """This is a class to perform feature extraction on images
     """
-    def __init__(self, method = "SIFT", n_keypoints=0, verbose=False):
+    def __init__(self, method = "SIFT", n_keypoints=0, verbose=False, visualize=False):
         self.method = method
         self.n_keypoints = n_keypoints
         self.verbose = verbose
+        self.visualize = visualize
         
         if self.method == "SIFT":
             if self.verbose:
@@ -187,6 +189,14 @@ class FeatureExtraction:
             video = cv2.VideoCapture(file_path)
             assert video.isOpened(), f"Video not opened. Filepath: {file_path}"
             n_video_frames = int( video.get(cv2.CAP_PROP_FRAME_COUNT) )
+            
+            # Specify amount of desired frames
+            n_desired_frames = 20
+            
+            # Calculating the divisor to obtain the desired amount of frames
+            frame_ids = np.linspace(0, n_video_frames-1, n_desired_frames, dtype=int)
+            frame = 0 # Initializing the frame counter
+            
         elif type == "image":
             image = cv2.imread(file_path)
         
@@ -202,9 +212,18 @@ class FeatureExtraction:
         while True:
             
             # If the file is a video, break the loop after all frames are read
-            if type == "video":  
+            if (type == "video"):
+                
+                if (frame == n_desired_frames) :
+                    break
+                
+                # Setting the frame to the next desired frame
+                video.set(cv2.CAP_PROP_POS_FRAMES, frame_ids[frame])
+                frame += 1
+                
+                # Reading the frame
                 ret, image = video.read()
-                if not ret:
+                if (not ret):
                     break
             
             # Performing Feature Extraction
@@ -221,7 +240,7 @@ class FeatureExtraction:
         
         # Checking for consistency in the amount of features obtained
         if type == "video":
-            assert len(features) == n_video_frames, f"Inconsistency: Amount of features obtained ({len(features)}) does not equate the amount of frames in video ({n_video_frames})."
+            assert len(features) == n_desired_frames, f"Inconsistency: Amount of features obtained ({len(features)}) does not equate the amount of desired frames from video ({n_desired_frames})."
             
         if self.verbose:
             print("Successful")
@@ -232,14 +251,18 @@ class FeatureExtraction:
         
         cv2.destroyAllWindows()
         
-        return features
+        if type == "video":
+            return features, frame_ids
+        elif type == "image":
+            return features
 
 
 # Class for Feature Matching
 class FeatureMatching:
-    def __init__(self, lib="opencv", verbose=False):
+    def __init__(self, lib="opencv", verbose=False, visualize=False):
         self.lib = lib # Options: "opencv", "sklearn"
         self.verbose = verbose
+        self.visualize = visualize
     
     def match_features(self, features, map="first", match_threshold=0.75):
         if self.verbose:
@@ -454,7 +477,7 @@ class ConfigParser:
             
         # Saving as MATLAB file
         if self.config_dict["keypoints_out_ext"] == "mat":
-            savemat( self.config_dict['keypoints_out_path'], features, oned_as='cell' )
+            savemat( f"{self.config_dict['keypoints_out_path']}.mat", {"features": features})
         
         # Saving as HDF5 file
         elif self.config_dict["keypoints_out_ext"] == "h5":
@@ -477,24 +500,24 @@ class ConfigParser:
         
         # Loading from MATLAB file
         if self.config_dict["keypoints_out_ext"] == "mat":
-            features = loadmat( self.config_dict['keypoints_out_path'] )
+            feats = loadmat( self.config_dict['keypoints_out_path'] )
         
         # Loading from HDF5 file
         elif self.config_dict["keypoints_out_ext"] == "h5":
             with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'r') as file:
-                features = []
+                feats = []
                 for frame in file:
-                    features.append( file[frame][()] )
+                    feats.append( file[frame][()] )
         
         # Loading from Pickle file
         elif self.config_dict["keypoints_out_ext"] == "pkl":
             with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'rb') as file:
-                features = pickle.load(file)
+                feats = pickle.load(file)
         
         if self.verbose:
             print("Successful")
         
-        return features
+        return feats
     
     def save_homography_output(self, homo_matrix):
         
@@ -503,7 +526,7 @@ class ConfigParser:
             
         # Saving as MATLAB file
         if self.config_dict["transforms_out_ext"] == "mat":
-            savemat( self.config_dict['transforms_out_path'], {"H": homo_matrix} )
+            savemat( f"{self.config_dict['transforms_out_path']}.mat", {"H": homo_matrix} )
         
         # Saving as HDF5 file
         elif self.config_dict["transforms_out_ext"] == "h5":
@@ -536,22 +559,34 @@ def parse_args():
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='enable verbose mode')
     
+    parser.add_argument('--visualize', '-o', action='store_true', default=False,
+                        help='enable plotting mode')
+    
     return parser.parse_args()
 
 if __name__ == '__main__':
     cmd_args = parse_args() #Read arguments passed on the command line
     parser = ConfigParser(config_path = cmd_args.config_file_path, verbose=cmd_args.verbose)
+
+    # Initializing the Feature Extraction
+    feat_extract = FeatureExtraction(method="SIFT", verbose=cmd_args.verbose, visualize=cmd_args.visualize)
     
-    # Loading extracted features
-    features = parser.load_features()
+    # Extracting Features from Image Map
+    features = feat_extract.extract_features(parser.config_dict["image_map"], type="image")
     
+    # Extracting Features from video files (Only One Video Accepted)
+    features_video, frame_ids = feat_extract.extract_features(parser.config_dict["videos"], type="video")
+    features.extend(features_video)
+    frame_ids = frame_ids + 1 # Adding 1 to the frame ids to account for the map frame
+    
+    parser.save_features(features)
+    # parser.load_features()
+
     # Matching Features
-    feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose)
+    feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose, visualize=cmd_args.visualize)
     pts_in_map, pts_in_frame = feat_match.match_features(features)
-    frame_ids = list( range(1, len(pts_in_frame)+1) )
-    
+
     # Computing Homography
-    homography = Homography(transforms="map", use_ransac=True, verbose=cmd_args.verbose)
+    homography = Homography(transforms="map", use_ransac=True, use_opencv=False, verbose=cmd_args.verbose, visualize=cmd_args.visualize)
     homo_output_matrix = homography.compute_homography( pts_in_map, pts_in_frame, frame_ids )
-    # homo_output = homography.compute_homography(parser.config_dict["map_points"], parser.config_dict["frame_points"], parser.config_dict["frame_ids"])
     parser.save_homography_output(homo_output_matrix)
