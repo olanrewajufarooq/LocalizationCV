@@ -24,7 +24,104 @@ class Homography:
         
         if self.use_ransac:
             self.n_iterations = 35 # TODO: Implement the code to calculate the number of iterations.
+
+    def visualize_homographies(self, map_image_path, video_path, homography_matrices, frame_ids):
+        if self.visualize:
+            print("Visualizing Homographies...", end=" ")
+
+            # Load the map image
+            map_image = cv2.imread(map_image_path)
+
+            # Open the video file
+            video = cv2.VideoCapture(video_path)
+            assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
+
+            for frame_id in frame_ids:
+                # Find the column in the homography matrix corresponding to this frame_id
+                col_index = np.where(homography_matrices[1] == frame_id)[0][0]
+                
+                # Extract the 3x3 homography matrix
+                H = homography_matrices[2:, col_index].reshape(3, 3)
+
+                # Set the video to the specific frame
+                video.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+                
+                # Read the frame
+                ret, frame_image = video.read()
+                assert ret, f"Failed to read frame at ID {frame_id}"
+
+                # Apply homography to transform the frame image
+                transformed_image = cv2.warpPerspective(frame_image, H, (map_image.shape[1], map_image.shape[0]))
+
+                # Create an image to draw on
+                height = max(map_image.shape[0], transformed_image.shape[0])
+                width = map_image.shape[1] + transformed_image.shape[1]
+                output_image = np.zeros((height, width, 3), dtype=np.uint8)
+
+                # Place the map and transformed frame side by side in the output image
+                output_image[:map_image.shape[0], :map_image.shape[1]] = map_image
+                output_image[:transformed_image.shape[0], map_image.shape[1]:] = transformed_image
+
+                # Show the output image
+                cv2.imshow(f"Homography - Frame {frame_id}", output_image)
+                cv2.waitKey(0)
+
+            video.release()
+            cv2.destroyAllWindows()
+            print("Done")
     
+    def create_mosaic(self, video_path, homography_matrices, frame_ids):
+        print("Creating Mosaic...", end=" ")
+
+        # Open the video file
+        video = cv2.VideoCapture(video_path)
+        assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
+
+        # Initialize an empty list to store transformed images
+        transformed_images = []
+
+        for frame_id in frame_ids:
+            # Find the column in the homography matrix corresponding to this frame_id
+            col_index = np.where(homography_matrices[1] == frame_id)[0][0]
+            
+            # Extract the 3x3 homography matrix
+            H = homography_matrices[2:, col_index].reshape(3, 3)
+
+            # Set the video to the specific frame
+            video.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+            
+            # Read the frame
+            ret, frame_image = video.read()
+            assert ret, f"Failed to read frame at ID {frame_id}"
+
+            # Apply homography to transform the frame image
+            transformed_image = cv2.warpPerspective(frame_image, H, (frame_image.shape[1], frame_image.shape[0]))
+            transformed_images.append(transformed_image)
+
+        # Close the video file
+        video.release()
+
+        # Calculate the total width and height of the mosaic
+        total_width = sum(image.shape[1] for image in transformed_images)
+        max_height = max(image.shape[0] for image in transformed_images)
+
+        # Create a blank image to hold the mosaic
+        mosaic = np.zeros((max_height, total_width, 3), dtype=np.uint8)
+
+        # Place each transformed image in the mosaic
+        current_x = 0
+        for image in transformed_images:
+            mosaic[0:image.shape[0], current_x:current_x + image.shape[1]] = image
+            current_x += image.shape[1]
+
+        # Show the mosaic
+        cv2.imshow("Mosaic", mosaic)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        print("Done")
+
+        return mosaic
+
     def _compute_homography_without_cv(self, input_points, output_points):
         
         # Checking for consistency in the amount of points
@@ -163,16 +260,23 @@ class FeatureExtraction:
     
     def _extract_features_sift(self, image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        keypoints, descriptors = self.extractor.detectAndCompute(gray, None)
+        keypoints_main, descriptors = self.extractor.detectAndCompute(gray, None)
         
         # Extracting the X and Y points from the KeyPoint Object
-        keypoints = np.array( [ (kp.pt[0], kp.pt[1]) for kp in keypoints ] )
+        keypoints = np.array( [ (kp.pt[0], kp.pt[1]) for kp in keypoints_main ] )
         
         # Verification of Data
         assert keypoints.shape[0] == descriptors.shape[0], "Inconsistency. Amount of features must be equal to the amount of descriptors" + \
             f"\n Obtained: Keypoint Shape - {keypoints.shape}. Descriptors Shape - {descriptors.shape} "
         assert keypoints.shape[1] == 2, f"Inconsistency in the size of keypoints. Obtained: {keypoints.shape}"
         assert descriptors.shape[1] == 128, f"Inconsistency in the size of descriptors. Obtained: {descriptors.shape}"
+
+        # #visualizing the features
+        if self.visualize:
+            image_with_keypoints = cv2.drawKeypoints(gray, keypoints_main, None, color=(0, 255, 0),)
+            cv2.imshow('frame', image_with_keypoints)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         
         return np.vstack((keypoints.T, descriptors.T))
     
@@ -263,7 +367,53 @@ class FeatureMatching:
         self.lib = lib # Options: "opencv", "sklearn"
         self.verbose = verbose
         self.visualize = visualize
-    
+
+    def _visualize_matching(self, map_image_path, video_path, pts_in_map, pts_in_frame):
+        if self.visualize:
+            print("Visualizing the matches...", end=" ")
+
+            # Load the map image
+            map_image = cv2.imread(map_image_path)
+
+            # Open the video file
+            video = cv2.VideoCapture(video_path)
+            assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
+
+            n_video_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+            n_desired_frames = 20
+            frame_ids = np.linspace(0, n_video_frames - 1, n_desired_frames, dtype=int)
+
+            for frame_id in frame_ids:
+                # Set the video to the specific frame
+                video.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+                
+                # Read the frame
+                ret, frame_image = video.read()
+                assert ret, f"Failed to read frame at ID {frame_id}"
+
+                # Create an image to draw on
+                height = max(map_image.shape[0], frame_image.shape[0])
+                width = map_image.shape[1] + frame_image.shape[1]
+                output_image = np.zeros((height, width, 3), dtype=np.uint8)
+
+                # Place the map and frame side by side in the output image
+                output_image[:map_image.shape[0], :map_image.shape[1]] = map_image
+                output_image[:frame_image.shape[0], map_image.shape[1]:] = frame_image
+
+                # Draw lines between matched points for the current frame
+                for pt_map, pt_frame in zip(pts_in_map[frame_id % n_desired_frames], pts_in_frame[frame_id % n_desired_frames]):
+                    pt_map = (int(pt_map[0]), int(pt_map[1]))
+                    pt_frame = (int(pt_frame[0] + map_image.shape[1]), int(pt_frame[1]))
+                    cv2.line(output_image, pt_map, pt_frame, color=(0, 255, 0), thickness=1)
+
+                # Show the output image
+                cv2.imshow(f"Matches - Frame {frame_id}", output_image)
+                cv2.waitKey(0)
+
+            video.release()
+            cv2.destroyAllWindows()
+            print("Done")
+
     def match_features(self, features, map="first", match_threshold=0.75):
         if self.verbose:
             print("Matching features...", end=" ")
@@ -282,10 +432,10 @@ class FeatureMatching:
             pts_in_map, pts_in_frame = self._knn_feature_matching(features_map, features_frames, match_threshold=match_threshold)
         
         assert len(pts_in_map) == len(pts_in_frame), f"Inconsistency in matching algorithm. Expected length equal length \nMap: {len(pts_in_map)}. Frame: {len(pts_in_frame)}"
-        
+
         if self.verbose:
             print("Successful")
-            
+ 
         return pts_in_map, pts_in_frame
     
     def _knn_feature_matching(self, features_map, features_frames, match_threshold=0.75):
@@ -316,7 +466,7 @@ class FeatureMatching:
                 
                 pts_in_map.append( accepted_pt_in_map )
                 pts_in_frame.append( accepted_pt_in_frame )
-                
+        
         return pts_in_map, pts_in_frame
     
     def _cv_feature_matching(self, features_map, features_frames, match_threshold=0.75):
@@ -586,7 +736,13 @@ if __name__ == '__main__':
     feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose, visualize=cmd_args.visualize)
     pts_in_map, pts_in_frame = feat_match.match_features(features)
 
+    #Visualize  the matches
+    feat_match._visualize_matching(parser.config_dict["image_map"], parser.config_dict["videos"], pts_in_map, pts_in_frame)
+
     # Computing Homography
     homography = Homography(transforms="map", use_ransac=True, use_opencv=False, verbose=cmd_args.verbose, visualize=cmd_args.visualize)
     homo_output_matrix = homography.compute_homography( pts_in_map, pts_in_frame, frame_ids )
     parser.save_homography_output(homo_output_matrix)
+
+    #visualize homography
+    homography.visualize_homographies(parser.config_dict["image_map"], parser.config_dict["videos"], homo_output_matrix, frame_ids)
