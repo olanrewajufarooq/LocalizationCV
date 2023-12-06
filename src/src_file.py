@@ -211,11 +211,11 @@ class Homography:
         return np.hstack(H_matrices), existing_transforms
     
     # Internal function to compute homography for all combinations of transforms (i.e. every possible frame to frame and frame to map) without repetition.
-    def _compute_homography_all_combinations(self, H_output_video_to_map, H_output_frame_to_map, frame_ids, existing_transforms):
+    def _compute_homography_all_combinations(self, H_output_video_to_map, frame_ids, existing_transforms):
         
-        for i, frame_id in enumerate(frame_ids):
-            
-            H_arrays = []
+        H_arrays = []
+        
+        for frame_id in frame_ids:
             
             # Find the column in the second row of the H_output_video_to_map matrix corresponding to this frame_id
             f2m_id = np.where(H_output_video_to_map[1] == frame_id)[0][0]
@@ -270,18 +270,19 @@ class Homography:
         
         H_output_video_to_map, existing_transforms = self._compute_homography_frame_to_map(H_output_video_to_refframe, H_output_refframe_to_map)
         
+        H_output_allframe_to_map = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
+        
         if self.verbose:
             print("Successful")
         
         if self.transforms == "map":
-            H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
+            H_output = H_output_allframe_to_map
         elif self.transforms == "all":
             if self.verbose:
                 print("Computing Homography from Each Video Frame to Every Other Video Frame...", end=" ")
             
-            H_output_video_to_map_ = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
-            H_frames_to_frames = self._compute_homography_all_combinations(H_output_video_to_map_, H_output_refframe_to_map, frame_ids, existing_transforms)
-            H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map, H_output_video_to_refframe, H_frames_to_frames) )
+            H_frames_to_frames = self._compute_homography_all_combinations(H_output_allframe_to_map, frame_ids, existing_transforms)
+            H_output = np.hstack( (H_output_allframe_to_map, H_output_video_to_refframe, H_frames_to_frames) )
         
             if self.verbose:
                 print("Successful")
@@ -768,7 +769,7 @@ if __name__ == '__main__':
                                                                        visualization_delay=1)
     
     # Computing Homography Matrices
-    homography = Homography(transforms=parser.config_dict["transforms"], use_ransac=True, use_opencv=True, verbose=cmd_args.verbose)
+    homography = Homography(transforms=parser.config_dict["transforms"], use_ransac=True, use_opencv=False, verbose=cmd_args.verbose)
     homo_output_matrix = homography.compute_homography( pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids, parserObject=parser)
     
     parser.save_homography_output(homo_output_matrix)
