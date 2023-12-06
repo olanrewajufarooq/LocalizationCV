@@ -264,7 +264,7 @@ class Homography:
             print("Successful")
         
         if self.transforms == "map":
-            H_output = H_output_video_to_map
+            H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
         elif self.transforms == "all":
             if self.verbose:
                 print("Computing Homography from Each Video Frame to Every Other Video Frame...", end=" ")
