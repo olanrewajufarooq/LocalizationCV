@@ -42,11 +42,13 @@ class Homography:
             A.append([0, 0, 0, x_in, y_in, 1, -y_out*x_in, -y_out*y_in, -y_out])
         
         A = np.array(A,dtype=np.double)
-        eig_values , eig_vectors = np.linalg.eig(A.T @ A)
-
+        # TODO: Include the variance matrix before computing the SVD
+        eig_values , eig_vectors = np.linalg.eig(A.T @ A) # TODO: Implement the SVD instead of the eigendecomposition
         min_eig_value = np.argmin(eig_values)
         min_eig_value_index = np.unravel_index(min_eig_value, eig_values.shape)
         H_array = eig_vectors[:,min_eig_value_index].reshape(-1,1)
+        
+        # TODO: Use the inverse of the variance matrix to compute the actual result for the eigenvectors (Do it in the appropriate place)
         
         return H_array / H_array[-1]
     
