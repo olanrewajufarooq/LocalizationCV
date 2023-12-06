@@ -175,22 +175,22 @@ class Homography:
             print("Successful.")
     
     # Internal function to compute homography from each video frame to the map.
-    def _compute_homography_frame_to_map(self, H_output_video_to_frame, H_output_frame_to_map):
+    def _compute_homography_frame_to_map(self, H_output_video_to_refframe, H_output_refframe_to_map):
         
-        existing_transforms = [(H_output_video_to_frame[0, i], H_output_video_to_frame[1, i]) for i in range(H_output_video_to_frame.shape[1])]
-        existing_transforms.extend( [(H_output_frame_to_map[0, i], H_output_frame_to_map[1, i]) for i in range(H_output_frame_to_map.shape[1])] )
+        existing_transforms = [(H_output_video_to_refframe[0, i], H_output_video_to_refframe[1, i]) for i in range(H_output_video_to_refframe.shape[1])]
+        existing_transforms.extend( [(H_output_refframe_to_map[0, i], H_output_refframe_to_map[1, i]) for i in range(H_output_refframe_to_map.shape[1])] )
         
         H_matrices = []
         
-        for v2f_id, (frame_id, corr_ref_id) in enumerate(zip(H_output_video_to_frame[1], H_output_video_to_frame[0])):
-            if ( (frame_id, corr_ref_id) in existing_transforms ) or ( (corr_ref_id, frame_id) in existing_transforms ):
+        for v2f_id, (frame_id, corr_ref_id) in enumerate(zip(H_output_video_to_refframe[1], H_output_video_to_refframe[0])):
+            if ( (frame_id, 0) in existing_transforms ) or ( (0, frame_id) in existing_transforms ):
                 continue
             
             # Find the column in the second row of the H_output_frame_to_map matrix corresponding to this corr_ref_id
-            f2m_id = np.where(H_output_frame_to_map[1] == corr_ref_id)[0][0]
+            f2m_id = np.where(H_output_refframe_to_map[1] == corr_ref_id)[0][0]
             
-            H_v2f = H_output_video_to_frame[2:, v2f_id].reshape(3, 3)
-            H_f2m = H_output_frame_to_map[2:, f2m_id].reshape(3, 3)
+            H_v2f = H_output_video_to_refframe[2:, v2f_id].reshape(3, 3)
+            H_f2m = H_output_refframe_to_map[2:, f2m_id].reshape(3, 3)
             
             H_v2m = (H_f2m @ H_v2f).reshape(-1, 1)
             H_array = np.vstack( (np.array([0, frame_id]).reshape(-1, 1), H_v2m) )
@@ -198,14 +198,10 @@ class Homography:
             H_matrices.append(H_array)
             existing_transforms.append( (0, frame_id) )
         
-        if len(H_matrices) > 0:
-            return np.hstack(H_matrices), existing_transforms
-        else:
-            H_matrices, existing_transforms
+        return np.hstack(H_matrices), existing_transforms
     
     # Internal function to compute homography for all combinations of transforms (i.e. every possible frame to frame and frame to map) without repetition.
     def _compute_homography_all_combinations(self, H_output_video_to_map, H_output_frame_to_map, frame_ids, existing_transforms):
-        
         
         for i, frame_id in enumerate(frame_ids):
             
@@ -238,7 +234,7 @@ class Homography:
                 existing_transforms.append( (frame_id, another_frame_id) )
         
         return np.hstack(H_arrays)
-    
+
     
     # This is the function called by the main program
     def compute_homography(self, pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids, parserObject, map_image_path=None, video_path=None, visualization_delay=0):
