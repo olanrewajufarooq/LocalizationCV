@@ -1,8 +1,5 @@
 import argparse
-import pickle
-import h5py
 import numpy as np
-import PIL
 import cv2
 from scipy.io import loadmat, savemat
 from sklearn.neighbors import NearestNeighbors
@@ -113,11 +110,11 @@ class Homography:
                 else:
                     H_array = self._compute_homography_without_cv(input_points=input_points, output_points=output_points)
                 
-                assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
-                
-                # Stacking the frame id to the homography array
-                H_output_array = np.vstack( (np.array([corr_ref_id, frame_id]).reshape(-1, 1), H_array) )
-                H_output_arrays.append(H_output_array)
+            assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
+            
+            # Stacking the frame id to the homography array
+            H_output_array = np.vstack( (np.array([corr_ref_id, frame_id]).reshape(-1, 1), H_array) )
+            H_output_arrays.append(H_output_array)
         
         # Stacking the homography outputs.
         H_output = np.hstack(H_output_arrays)
@@ -673,14 +670,10 @@ class ConfigParser:
             self.config_dict["image_map"] = self.data_reading["image_map"][0][0]
         
         # Parsing the Keypoint Output Path and Extension
-        keypoints_out= self.data_reading["keypoints_out"][0][0].split(".")
-        self.config_dict["keypoints_out_path"] = keypoints_out[0]
-        self.config_dict["keypoints_out_ext"] = keypoints_out[1]
+        self.config_dict["keypoints_out_path"]= self.data_reading["keypoints_out"][0][0]
         
         # Parsing the Transformation Output Path and Extension
-        transforms_out= self.data_reading["transforms_out"][0][0].split(".")
-        self.config_dict["transforms_out_path"] = transforms_out[0]
-        self.config_dict["transforms_out_ext"] = transforms_out[1]
+        self.config_dict["transforms_out_path"]= self.data_reading["transforms_out"][0][0]
 
         # Saving the specified Transformation Method
         self.config_dict["transforms"] = self.data_reading["transforms"][0][1]
@@ -688,46 +681,21 @@ class ConfigParser:
     def save_features(self, features):
         
         if self.verbose:
-            print(f"Saving features as .{self.config_dict['keypoints_out_ext']} file...", end=" ")
+            print(f"Saving features as to {self.config_dict['keypoints_out_path']} ...", end=" ")
             
         # Saving as MATLAB file
-        if self.config_dict["keypoints_out_ext"] == "mat":
-            savemat( f"{self.config_dict['keypoints_out_path']}.mat", {"features": features})
-        
-        # Saving as HDF5 file
-        elif self.config_dict["keypoints_out_ext"] == "h5":
-            with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'w') as file:
-                for frame, feature in enumerate(features):
-                    file.create_dataset(f"{frame}", data=feature)
-        
-        # Saving as Pickle file
-        elif self.config_dict["keypoints_out_ext"] == "pkl":
-            with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'wb') as file:
-                pickle.dump(features, file)
+        savemat( f"{self.config_dict['keypoints_out_path']}", {"features": features})
         
         if self.verbose:
             print("Successful")
             
     def load_features(self):
-            
+        
         if self.verbose:
             print(f"Loading features from .{self.config_dict['keypoints_out_ext']} file...", end=" ")
         
         # Loading from MATLAB file
-        if self.config_dict["keypoints_out_ext"] == "mat":
-            feats = loadmat( self.config_dict['keypoints_out_path'] )
-        
-        # Loading from HDF5 file
-        elif self.config_dict["keypoints_out_ext"] == "h5":
-            with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'r') as file:
-                feats = []
-                for frame in file:
-                    feats.append( file[frame][()] )
-        
-        # Loading from Pickle file
-        elif self.config_dict["keypoints_out_ext"] == "pkl":
-            with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'rb') as file:
-                feats = pickle.load(file)
+        feats = loadmat( self.config_dict['keypoints_out_path'] )
         
         if self.verbose:
             print("Successful")
