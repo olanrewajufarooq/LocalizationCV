@@ -215,7 +215,7 @@ class Homography:
         
         H_arrays = []
         
-        for frame_id in frame_ids:
+        for id, frame_id in enumerate(frame_ids):
             
             # Find the column in the second row of the H_output_video_to_map matrix corresponding to this frame_id
             f2m_id = np.where(H_output_video_to_map[1] == frame_id)[0][0]
@@ -228,7 +228,7 @@ class Homography:
             
             H_f2m_inv = np.linalg.inv(H_f2m)
             
-            for another_frame_id in frame_ids[i:]:
+            for another_frame_id in frame_ids[id:]:
                 if ( (frame_id, another_frame_id) in existing_transforms ) or ( (another_frame_id, frame_id) in existing_transforms ):
                     continue
                 
