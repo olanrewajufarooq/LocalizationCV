@@ -101,8 +101,19 @@ class Homography:
         
         for output_points, input_points, frame_id, corr_ref_id in zip(pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids):
             if self.use_opencv:
-                # TODO: Implement OpenCV here.
-                pass
+                input_points = np.array(input_points,dtype=np.float32)
+                output_points = np.array(output_points,dtype=np.float32)
+
+                if input_points.shape != output_points.shape:
+                    raise ValueError(f"Inconsistent shapes: input_points {input_points.shape} vs output_points {output_points.shape}")
+
+                if self.use_ransac:
+                    H_array, _ = cv2.findHomography(input_points,output_points,cv2.RANSAC,5.0)
+                else:
+                    H_array, _ = cv2.findHomography(input_points,output_points)
+
+                H_array = H_array.reshape(-1, 1)
+                
             else:
                 # Computing the homography matrix without using OpenCV
                 if self.use_ransac:
@@ -210,10 +221,10 @@ class Homography:
             f2m_id = np.where(H_output_video_to_map[1] == frame_id)[0][0]
             H_f2m = H_output_video_to_map[2:, f2m_id].reshape(3, 3)
             
-            if np.abs(np.linalg.det(H_f2m)) < 1e-5:
+            if np.abs(np.linalg.det(H_f2m)) < 1e-5: # Checking if the determinant of the matrix is close to zero
                 if self.verbose:
-                    print("x", end="")
-                continue
+                    print("x", end="") # Printing an "x" to indicate that the matrix is close to singular
+                continue # Skipping this iteration if the matrix is close to singular
             
             H_f2m_inv = np.linalg.inv(H_f2m)
             
@@ -222,8 +233,8 @@ class Homography:
                     continue
                 
                 # Find the column in the second row of the H_output_frame_to_map matrix corresponding to this another_frame_id
-                af2m_id = np.where(H_output_frame_to_map[1] == another_frame_id)[0][0]
-                H_af2m = H_output_frame_to_map[2:, af2m_id].reshape(3, 3)
+                af2m_id = np.where(H_output_video_to_map[1] == another_frame_id)[0][0]
+                H_af2m = H_output_video_to_map[2:, af2m_id].reshape(3, 3)
                 
                 H_f2af = (H_f2m_inv @ H_af2m).reshape(-1, 1)
                 H_array = np.vstack( (np.array([frame_id, another_frame_id]).reshape(-1, 1), H_f2af) )
@@ -268,7 +279,8 @@ class Homography:
             if self.verbose:
                 print("Computing Homography from Each Video Frame to Every Other Video Frame...", end=" ")
             
-            H_frames_to_frames = self._compute_homography_all_combinations(H_output_video_to_map, H_output_refframe_to_map, frame_ids, existing_transforms)
+            H_output_video_to_map_ = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
+            H_frames_to_frames = self._compute_homography_all_combinations(H_output_video_to_map_, H_output_refframe_to_map, frame_ids, existing_transforms)
             H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map, H_output_video_to_refframe, H_frames_to_frames) )
         
             if self.verbose:
@@ -705,21 +717,10 @@ class ConfigParser:
     def save_homography_output(self, homo_matrix):
         
         if self.verbose:
-            print(f"Saving homography matrices as .{self.config_dict['transforms_out_ext']} file...", end=" ")
+            print(f"Saving homography matrices as {self.config_dict['transforms_out_path']}...", end=" ")
             
         # Saving as MATLAB file
-        if self.config_dict["transforms_out_ext"] == "mat":
-            savemat( f"{self.config_dict['transforms_out_path']}.mat", {"H": homo_matrix} )
-        
-        # Saving as HDF5 file
-        elif self.config_dict["transforms_out_ext"] == "h5":
-            with h5py.File(f"{self.config_dict['transforms_out_path']}.h5", 'w') as file:
-                file.create_dataset("H", data=homo_matrix)
-        
-        # Saving as Pickle file
-        elif self.config_dict["transforms_out_ext"] == "pkl":
-            with open(f"{self.config_dict['transforms_out_path']}.pkl", 'wb') as file:
-                pickle.dump(homo_matrix, file)
+        savemat( self.config_dict['transforms_out_path'], {"H": homo_matrix} )
         
         if self.verbose:
             print("Successful")
@@ -767,7 +768,7 @@ if __name__ == '__main__':
                                                                        visualization_delay=1)
     
     # Computing Homography Matrices
-    homography = Homography(transforms=parser.config_dict["transforms"], use_ransac=True, use_opencv=False, verbose=cmd_args.verbose)
+    homography = Homography(transforms=parser.config_dict["transforms"], use_ransac=True, use_opencv=True, verbose=cmd_args.verbose)
     homo_output_matrix = homography.compute_homography( pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids, parserObject=parser)
     
     parser.save_homography_output(homo_output_matrix)
