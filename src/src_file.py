@@ -16,7 +16,7 @@ class Homography:
     """
     
     def __init__(self, transforms = "map", use_ransac = True, use_opencv=True, verbose=False, visualize=False):
-        self.transforms = transforms
+        self.transforms = transforms # Options: "map", "all"
         self.use_ransac = use_ransac
         self.verbose = verbose
         self.use_opencv = use_opencv
@@ -24,52 +24,8 @@ class Homography:
         
         if self.use_ransac:
             self.n_iterations = 35 # TODO: Implement the code to calculate the number of iterations.
-
-    def visualize_homographies(self, map_image_path, video_path, homography_matrices, frame_ids):
-        if self.visualize:
-            print("Visualizing Homographies...", end=" ")
-
-            # Load the map image
-            map_image = cv2.imread(map_image_path)
-
-            # Open the video file
-            video = cv2.VideoCapture(video_path)
-            assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
-
-            for frame_id in frame_ids:
-                # Find the column in the homography matrix corresponding to this frame_id
-                col_index = np.where(homography_matrices[1] == frame_id)[0][0]
-                
-                # Extract the 3x3 homography matrix
-                H = homography_matrices[2:, col_index].reshape(3, 3)
-
-                # Set the video to the specific frame
-                video.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
-                
-                # Read the frame
-                ret, frame_image = video.read()
-                assert ret, f"Failed to read frame at ID {frame_id}"
-
-                # Apply homography to transform the frame image
-                transformed_image = cv2.warpPerspective(frame_image, H, (map_image.shape[1], map_image.shape[0]))
-
-                # Create an image to draw on
-                height = max(map_image.shape[0], transformed_image.shape[0])
-                width = map_image.shape[1] + transformed_image.shape[1]
-                output_image = np.zeros((height, width, 3), dtype=np.uint8)
-
-                # Place the map and transformed frame side by side in the output image
-                output_image[:map_image.shape[0], :map_image.shape[1]] = map_image
-                output_image[:transformed_image.shape[0], map_image.shape[1]:] = transformed_image
-
-                # Show the output image
-                cv2.imshow(f"Homography - Frame {frame_id}", output_image)
-                cv2.waitKey(0)
-
-            video.release()
-            cv2.destroyAllWindows()
-            print("Done")
-            
+    
+    # Internal function to compute homography without using OpenCV
     def _compute_homography_without_cv(self, input_points, output_points):
         
         # Checking for consistency in the amount of points
@@ -91,9 +47,10 @@ class Homography:
         min_eig_value = np.argmin(eig_values)
         min_eig_value_index = np.unravel_index(min_eig_value, eig_values.shape)
         H_array = eig_vectors[:,min_eig_value_index].reshape(-1,1)
-        
+
         return H_array / H_array[-1]
     
+    # Internal function to compute homography using RANSAC
     def _run_ransac(self, input_points, output_points):
         # Checking for consistency in the amount of points
         assert (len(input_points) >= 4) and (len(output_points) >= 4), "At least 4 points are required to compute homography."
@@ -138,25 +95,40 @@ class Homography:
         
         return best_H_array
     
-    def _compute_homography_map(self, pts_in_map, pts_in_frame, frame_ids):
+    # Internal function to compute homography when transforms = map
+    def _compute_homography_frame_to_ref(self, pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids):
         
         H_output_arrays = []
         
-        for output_points, input_points, frame_id in zip(pts_in_map, pts_in_frame, frame_ids):
+        for output_points, input_points, frame_id, corr_ref_id in zip(pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids):
             if self.use_opencv:
-                # TODO: Implement OpenCV here.
-                pass
+                input_points = np.array(input_points,dtype=np.float32)
+                output_points = np.array(output_points,dtype=np.float32)
+
+                if input_points.shape != output_points.shape:
+                    raise ValueError(f"Inconsistent shapes: input_points {input_points.shape} vs output_points {output_points.shape}")
+
+                if self.use_ransac:
+                    H_array, _ = cv2.findHomography(input_points,output_points,cv2.RANSAC,5.0)
+                else:
+                    H_array, _ = cv2.findHomography(input_points,output_points)
+                
+                H_array = H_array.reshape(-1, 1)                
+                assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
+                 # Stacking the frame id to the homography array 
+                H_output_array = np.vstack( (np.array([corr_ref_id, frame_id]).reshape(-1, 1), H_array) )
+                H_output_arrays.append(H_output_array)
             else:
                 # Computing the homography matrix without using OpenCV
                 if self.use_ransac:
                     H_array = self._run_ransac(input_points=input_points, output_points=output_points)
                 else:
                     H_array = self._compute_homography_without_cv(input_points=input_points, output_points=output_points)
-                
+
                 assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
                 
                 # Stacking the frame id to the homography array
-                H_output_array = np.vstack( (np.array([0, frame_id]).reshape(-1, 1), H_array) )
+                H_output_array = np.vstack( (np.array([corr_ref_id, frame_id]).reshape(-1, 1), H_array) )
                 H_output_arrays.append(H_output_array)
         
         # Stacking the homography outputs.
@@ -164,18 +136,164 @@ class Homography:
         
         return H_output
     
-    def compute_homography(self, pts_in_map, pts_in_frame, frame_ids):
+    # Internal function to visualize the homography
+    def _visualize_homographies(self, map_image_path, video_path, homography_matrices, frame_ids, visualization_delay=0):
         if self.verbose:
-            print(f"Computing Homography. Use Ransac: {self.use_ransac}. Use OpenCV: {self.use_opencv}. Type: {self.transforms}...", end=" ")
+            print("Visualizing Homographies...", end=" ")
         
-        if self.transforms == "map":
-            H_output = self._compute_homography_map(pts_in_map, pts_in_frame, frame_ids)
-        elif self.transforms == "all":
-            # TODO: Implement the code to compute homography for all frames.
-            pass
+        
+        # Load the map image
+        map_image = cv2.imread(map_image_path)
+        assert map_image is not None, f"Error: Couldn't open the image file at {map_image_path}"
+
+        # Open the video file
+        video = cv2.VideoCapture(video_path)
+        assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
+
+        for frame_id in frame_ids:
+            # Find the column in the homography matrix corresponding to this frame_id
+            col_index = np.where(homography_matrices[1] == frame_id)[0][0]
+
+            # Extract the 3x3 homography matrix
+            H = homography_matrices[2:, col_index].reshape(3, 3)
+
+            # Set the video to the specific frame
+            frame_id = frame_id - 1 # Subtracting 1 to return to 0-indexing (we saved the frame_ids using 1-indexing)
+            video.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+
+            # Read the frame
+            ret, frame_image = video.read()
+            assert ret, f"Failed to read frame at ID {frame_id}"
+
+            # Apply homography to transform the frame image
+            transformed_image = cv2.warpPerspective( frame_image, H, (map_image.shape[1], map_image.shape[0]) )
+
+            # Create an image to draw on
+            height = max(map_image.shape[0], transformed_image.shape[0])
+            width = map_image.shape[1] + transformed_image.shape[1]
+            output_image = np.zeros((height, width, 3), dtype=np.uint8)
+
+            # Place the map and transformed frame side by side in the output image
+            output_image[:map_image.shape[0], :map_image.shape[1]] = map_image
+            output_image[:transformed_image.shape[0], map_image.shape[1]:] = transformed_image
+
+            # Show the output image
+            cv2.imshow(f"Homography - Frame {frame_id}", output_image)
+            cv2.waitKey(int(visualization_delay * 1000))
+            cv2.destroyAllWindows()
+
+        video.release()
+        cv2.destroyAllWindows()
+        
+        if self.verbose:
+            print("Successful.")
+    
+    # Internal function to compute homography from each video frame to the map.
+    def _compute_homography_frame_to_map(self, H_output_video_to_refframe, H_output_refframe_to_map):
+        
+        existing_transforms = [(H_output_video_to_refframe[0, i], H_output_video_to_refframe[1, i]) for i in range(H_output_video_to_refframe.shape[1])]
+        existing_transforms.extend( [(H_output_refframe_to_map[0, i], H_output_refframe_to_map[1, i]) for i in range(H_output_refframe_to_map.shape[1])] )
+        
+        H_matrices = []
+        
+        for v2f_id, (frame_id, corr_ref_id) in enumerate(zip(H_output_video_to_refframe[1], H_output_video_to_refframe[0])):
+            if ( (frame_id, 0) in existing_transforms ) or ( (0, frame_id) in existing_transforms ):
+                continue
+            
+            # Find the column in the second row of the H_output_frame_to_map matrix corresponding to this corr_ref_id
+            f2m_id = np.where(H_output_refframe_to_map[1] == corr_ref_id)[0][0]
+            
+            H_v2f = H_output_video_to_refframe[2:, v2f_id].reshape(3, 3)
+            H_f2m = H_output_refframe_to_map[2:, f2m_id].reshape(3, 3)
+            
+            H_v2m = (H_f2m @ H_v2f).reshape(-1, 1)
+            H_array = np.vstack( (np.array([0, frame_id]).reshape(-1, 1), H_v2m) )
+            
+            H_matrices.append(H_array)
+            existing_transforms.append( (0, frame_id) )
+        
+        return np.hstack(H_matrices), existing_transforms
+    
+    # Internal function to compute homography for all combinations of transforms (i.e. every possible frame to frame and frame to map) without repetition.
+    def _compute_homography_all_combinations(self, H_output_video_to_map, H_output_frame_to_map, frame_ids, existing_transforms):
+        
+        for i, frame_id in enumerate(frame_ids):
+            
+            H_arrays = []
+            
+            # Find the column in the second row of the H_output_video_to_map matrix corresponding to this frame_id
+            f2m_id = np.where(H_output_video_to_map[1] == frame_id)[0][0]
+            H_f2m = H_output_video_to_map[2:, f2m_id].reshape(3, 3)
+            
+            if np.abs(np.linalg.det(H_f2m)) < 1e-5:
+                if self.verbose:
+                    print("x", end="")
+                continue
+            
+            H_f2m_inv = np.linalg.inv(H_f2m)
+            
+            for another_frame_id in frame_ids[i:]:
+                if ( (frame_id, another_frame_id) in existing_transforms ) or ( (another_frame_id, frame_id) in existing_transforms ):
+                    continue
+                
+                # Find the column in the second row of the H_output_frame_to_map matrix corresponding to this another_frame_id
+                af2m_id = np.where(H_output_frame_to_map[1] == another_frame_id)[0][0]
+                H_af2m = H_output_frame_to_map[2:, af2m_id].reshape(3, 3)
+                
+                H_f2af = (H_f2m_inv @ H_af2m).reshape(-1, 1)
+                H_array = np.vstack( (np.array([frame_id, another_frame_id]).reshape(-1, 1), H_f2af) )
+                
+                H_arrays.append(H_array)
+                
+                existing_transforms.append( (frame_id, another_frame_id) )
+        
+        return np.hstack(H_arrays)
+
+    
+    # This is the function called by the main program
+    def compute_homography(self, pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids, parserObject, map_image_path=None, video_path=None, visualization_delay=0):
+        if self.verbose:
+            print(f"Initializing Homography. Type: {self.transforms}. Use Ransac: {self.use_ransac}. Use OpenCV: {self.use_opencv}.")
+        
+        if self.verbose:
+            print("Computing Homography from Each Video Frame to Nearest Reference Frame...", end=" ")
+        
+        H_output_video_to_refframe = self._compute_homography_frame_to_ref( pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids)
         
         if self.verbose:
             print("Successful")
+            print("Computing Homography from Each Reference Frame to Map...", end=" ")
+        
+        H_output_refframe_to_map = self._compute_homography_frame_to_ref(parserObject.config_dict["map_points"], parserObject.config_dict["frame_points"],
+                                                                        parserObject.config_dict["frame_ids"], [0]*len(parserObject.config_dict["frame_ids"])
+                                                                        )
+        
+        if self.verbose:
+            print("Successful")
+            print("Computing Homography from Each Video Frame to Map...", end=" ")
+        
+        H_output_video_to_map, existing_transforms = self._compute_homography_frame_to_map(H_output_video_to_refframe, H_output_refframe_to_map)
+        
+        if self.verbose:
+            print("Successful")
+        
+        if self.transforms == "map":
+            H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
+        elif self.transforms == "all":
+            if self.verbose:
+                print("Computing Homography from Each Video Frame to Every Other Video Frame...", end=" ")
+            
+            H_frames_to_frames = self._compute_homography_all_combinations(H_output_video_to_map, H_output_refframe_to_map, frame_ids, existing_transforms)
+            H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map, H_output_video_to_refframe, H_frames_to_frames) )
+        
+            if self.verbose:
+                print("Successful")
+        
+        if self.visualize:
+            assert map_image_path is not None, "Map image path not provided."
+            assert video_path is not None, "Video path not provided."
+            
+            self._visualize_homographies(map_image_path, video_path, H_output, frame_ids, visualization_delay=visualization_delay)
         
         return H_output
 
@@ -184,9 +302,10 @@ class Homography:
 class FeatureExtraction:
     """This is a class to perform feature extraction on images
     """
-    def __init__(self, method = "SIFT", n_keypoints=0, verbose=False, visualize=False):
+    def __init__(self, method = "SIFT", n_keypoints=0, blur=False, verbose=False, visualize=False):
         self.method = method
         self.n_keypoints = n_keypoints
+        self.blur = blur
         self.verbose = verbose
         self.visualize = visualize
         
@@ -206,7 +325,7 @@ class FeatureExtraction:
             if self.verbose:
                 print("Successful")
     
-    def _extract_features_sift(self, image):
+    def _extract_features_sift(self, image, visualization_delay=0):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         keypoints_main, descriptors = self.extractor.detectAndCompute(gray, None)
         
@@ -218,17 +337,17 @@ class FeatureExtraction:
             f"\n Obtained: Keypoint Shape - {keypoints.shape}. Descriptors Shape - {descriptors.shape} "
         assert keypoints.shape[1] == 2, f"Inconsistency in the size of keypoints. Obtained: {keypoints.shape}"
         assert descriptors.shape[1] == 128, f"Inconsistency in the size of descriptors. Obtained: {descriptors.shape}"
-
+        
         # #visualizing the features
         if self.visualize:
-            image_with_keypoints = cv2.drawKeypoints(gray, keypoints_main, None, color=(0, 255, 0),)
+            image_with_keypoints = cv2.drawKeypoints(image, keypoints_main, None, color=(0, 255, 0),)
             cv2.imshow('frame', image_with_keypoints)
-            cv2.waitKey(0)
+            cv2.waitKey(int(visualization_delay * 1000))
             cv2.destroyAllWindows()
         
         return np.vstack((keypoints.T, descriptors.T))
     
-    def extract_features(self, file_path, type="image"):
+    def extract_features(self, file_path,  type="video", n_desired_frames=0, visualization_delay=0):
         
         if self.verbose:
             if type == "video":
@@ -243,14 +362,24 @@ class FeatureExtraction:
             n_video_frames = int( video.get(cv2.CAP_PROP_FRAME_COUNT) )
             
             # Specify amount of desired frames
-            n_desired_frames = 20
+            if n_desired_frames == 0:
+                n_desired_frames = n_video_frames
+            
+            assert n_desired_frames <= n_video_frames, f"Desired amount of frames ({n_desired_frames}) is greater than the amount of frames in the video ({n_video_frames})."
+            assert isinstance(n_desired_frames, int), f"Desired amount of frames must be an integer. Given: {n_desired_frames}"
             
             # Calculating the divisor to obtain the desired amount of frames
-            frame_ids = np.linspace(0, n_video_frames-1, n_desired_frames, dtype=int)
-            frame = 0 # Initializing the frame counter
+            iter_frame_ids = np.linspace(0, n_video_frames-1, n_desired_frames, dtype=int)
+            
+            features = np.empty((n_desired_frames, ), dtype=object)
+            features_frame_ids = []
             
         elif type == "image":
             image = cv2.imread(file_path)
+            assert image is not None, f"Error: Couldn't open the image file at {file_path}"
+            
+            features = np.empty((1,), dtype=object)
+            iter_frame_ids = [0] # Only one iteration is needed for images
         
         if self.verbose:
             print("Successful")
@@ -259,43 +388,38 @@ class FeatureExtraction:
                 print(f"Number of Frames in Video: {n_video_frames}. Frame Rate: {frame_rate}")
             print("Extracting features from frames...", end=" ")
         
-        features = []
-        
-        while True:
+        count = 0
+        for frame in iter_frame_ids:
             
             # If the file is a video, break the loop after all frames are read
             if (type == "video"):
-                
-                if (frame == n_desired_frames) :
-                    break
-                
                 # Setting the frame to the next desired frame
-                video.set(cv2.CAP_PROP_POS_FRAMES, frame_ids[frame])
-                frame += 1
+                video.set(cv2.CAP_PROP_POS_FRAMES, frame)
                 
                 # Reading the frame
                 ret, image = video.read()
                 if (not ret):
                     break
+                elif image is None:
+                    continue
+                
+            if self.blur:
+                image = cv2.GaussianBlur(image, (11, 11), 0)
             
             # Performing Feature Extraction
             if self.method == "SIFT":
-                features.append( self._extract_features_sift(image) )
+                features[count] = self._extract_features_sift(image, visualization_delay=visualization_delay)
+                features_frame_ids.append(frame)
+                count+=1
             
             # If the file is an image, break the loop after one iteration
             if type == "image":
                 break
-            
-            # Press 'q' to exit the loop
-            # if cv2.waitKey(1) & 0xFF == ord('q'):
-            #     break
         
         # Checking for consistency in the amount of features obtained
-        if type == "video":
-            assert len(features) == n_desired_frames, f"Inconsistency: Amount of features obtained ({len(features)}) does not equate the amount of desired frames from video ({n_desired_frames})."
-            
         if self.verbose:
             print("Successful")
+            print(f"No of frame where features were extracted: {len(features_frame_ids)}/{n_desired_frames}")
 
         # Closing opened files
         if type == "video":
@@ -304,6 +428,8 @@ class FeatureExtraction:
         cv2.destroyAllWindows()
         
         if type == "video":
+            features= features[:len(features_frame_ids)] # Removing the empty elements in the features array
+            frame_ids = np.array(features_frame_ids) + 1 # Adding 1 to the frame ids to convert from 0-indexing to 1-indexing
             return features, frame_ids
         elif type == "image":
             return features
@@ -315,147 +441,149 @@ class FeatureMatching:
         self.lib = lib # Options: "opencv", "sklearn"
         self.verbose = verbose
         self.visualize = visualize
-
-    def _visualize_matching(self, map_image_path, video_path, pts_in_map, pts_in_frame):
-        if self.visualize:
-            print("Visualizing the matches...", end=" ")
-
-            # Load the map image
-            map_image = cv2.imread(map_image_path)
-
-            # Open the video file
-            video = cv2.VideoCapture(video_path)
-            assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
-
-            n_video_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-            n_desired_frames = 20
-            frame_ids = np.linspace(0, n_video_frames - 1, n_desired_frames, dtype=int)
-
-            for frame_id in frame_ids:
-                # Set the video to the specific frame
-                video.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
-                
-                # Read the frame
-                ret, frame_image = video.read()
-                assert ret, f"Failed to read frame at ID {frame_id}"
-
-                # Create an image to draw on
-                height = max(map_image.shape[0], frame_image.shape[0])
-                width = map_image.shape[1] + frame_image.shape[1]
-                output_image = np.zeros((height, width, 3), dtype=np.uint8)
-
-                # Place the map and frame side by side in the output image
-                output_image[:map_image.shape[0], :map_image.shape[1]] = map_image
-                output_image[:frame_image.shape[0], map_image.shape[1]:] = frame_image
-
-                # Draw lines between matched points for the current frame
-                for pt_map, pt_frame in zip(pts_in_map[frame_id % n_desired_frames], pts_in_frame[frame_id % n_desired_frames]):
-                    pt_map = (int(pt_map[0]), int(pt_map[1]))
-                    pt_frame = (int(pt_frame[0] + map_image.shape[1]), int(pt_frame[1]))
-                    cv2.line(output_image, pt_map, pt_frame, color=(0, 255, 0), thickness=1)
-
-                # Show the output image
-                cv2.imshow(f"Matches - Frame {frame_id}", output_image)
-                cv2.waitKey(0)
-
-            video.release()
-            cv2.destroyAllWindows()
-            print("Done")
-
-    def match_features(self, features, map="first", match_threshold=0.75):
+    
+    def match_features(self, features, frame_ids, ref_frame_ids = [1], match_threshold=0.75, map_image_path=None, video_path=None, visualization_delay=0):
         if self.verbose:
             print("Matching features...", end=" ")
         
-        # Extracting the features of the map and frames
-        if map == "first":
-            features_map = features[0]
-            features_frames = features[1:]
-        elif map == "last":
-            features_map = features[-1]
-            features_frames = features[:-1]
-        
         if self.lib == "opencv":
-            pts_in_map, pts_in_frame, features_match_objects = self._cv_feature_matching(features_map, features_frames, match_threshold=match_threshold)
+            corr_ref_ids, pts_in_ref, pts_in_frame = self._cv_feature_matching(features, frame_ids, ref_frame_ids, match_threshold=match_threshold)
         elif self.lib == "sklearn":
-            pts_in_map, pts_in_frame = self._knn_feature_matching(features_map, features_frames, match_threshold=match_threshold)
+            corr_ref_ids, pts_in_ref, pts_in_frame = self._knn_feature_matching(features, frame_ids, ref_frame_ids, match_threshold=match_threshold)
         
-        assert len(pts_in_map) == len(pts_in_frame), f"Inconsistency in matching algorithm. Expected length equal length \nMap: {len(pts_in_map)}. Frame: {len(pts_in_frame)}"
-
+        assert len(pts_in_ref) == len(pts_in_frame), f"Inconsistency in matching algorithm. Expected length equal length \nMap: {len(pts_in_ref)}. Frame: {len(pts_in_frame)}"
+        
         if self.verbose:
             print("Successful")
- 
-        return pts_in_map, pts_in_frame
-    
-    def _knn_feature_matching(self, features_map, features_frames, match_threshold=0.75):
-        map_descriptor = features_map[2:].T.astype(np.uint8)
-        
-        pts_in_map = []
-        pts_in_frame = []
-        
-        knn = NearestNeighbors(n_neighbors=2, algorithm='ball_tree').fit(map_descriptor)
             
-        for feature in features_frames:
-                
-                # Extracting the descriptors of the frame
-                frame_descriptor = feature[2:].T.astype(np.uint8)
-                
-                # Checking for consistencies in the descriptors
-                assert map_descriptor.shape[1] == frame_descriptor.shape[1], f"Inconsistency in the size of descriptor. \nMap: {map_descriptor.shape[1]}. Frame: {frame_descriptor.shape[1]}"
-                
-                distances, indices = knn.kneighbors(frame_descriptor)
-                
-                accepted_pt_in_map = []
-                accepted_pt_in_frame = []
-                
-                for i, d in enumerate(distances):
-                    if d[0] < match_threshold * d[1]:
-                        accepted_pt_in_map.append( tuple(features_map[:2, indices[i][0]]) ) # indices[i][0] is the index of the best match for the i-th feature in the frame
-                        accepted_pt_in_frame.append( tuple(feature[:2, i]) ) # i is the index of the i-th feature in the frame
-                
-                pts_in_map.append( accepted_pt_in_map )
-                pts_in_frame.append( accepted_pt_in_frame )
-        
-        return pts_in_map, pts_in_frame
+        if self.visualize:
+            
+            assert map_image_path is not None, "Map image path not provided."
+            assert video_path is not None, "Video path not provided."
+            
+            self._visualize_matching(video_path, pts_in_ref, pts_in_frame, corr_ref_ids, frame_ids, visualization_delay=visualization_delay)
+            
+        return corr_ref_ids, pts_in_ref, pts_in_frame
     
-    def _cv_feature_matching(self, features_map, features_frames, match_threshold=0.75):
-        # Extracting the keypoints and descriptors of the map
-        map_descriptor = features_map[2:].T.astype(np.uint8)
+    def _knn_feature_matching(self, features, frame_ids, ref_frame_ids, match_threshold=0.75):
         
-        pts_in_map = []
+        corr_ref_ids = []
+        pts_in_ref = []
+        pts_in_frame = []
+            
+        for frame_id, feature in zip(frame_ids, features):
+            corr_ref_id = ref_frame_ids[ np.argmin( np.abs( np.array(ref_frame_ids) - frame_id) ) ]
+            ref_feature = features[corr_ref_id]
+            
+            # Extracting the descriptors of the frame
+            ref_descriptor = ref_feature[2:].T.astype(np.uint8)
+            frame_descriptor = feature[2:].T.astype(np.uint8)
+            
+            # Initializing the Nearest Neighbors Classifier
+            knn = NearestNeighbors(n_neighbors=2, algorithm='ball_tree').fit(ref_descriptor)
+            
+            # Checking for consistencies in the descriptors
+            assert ref_descriptor.shape[1] == frame_descriptor.shape[1], f"Inconsistency in the size of descriptor. \nMap: {ref_descriptor.shape[1]}. Frame: {frame_descriptor.shape[1]}"
+            
+            distances, indices = knn.kneighbors(frame_descriptor)
+            
+            accepted_pt_in_ref = []
+            accepted_pt_in_frame = []
+            
+            for i, d in enumerate(distances):
+                if d[0] < match_threshold * d[1]:
+                    accepted_pt_in_ref.append( tuple(ref_feature[:2, indices[i][0]]) ) # indices[i][0] is the index of the best match for the i-th feature in the frame
+                    accepted_pt_in_frame.append( tuple(feature[:2, i]) ) # i is the index of the i-th feature in the frame
+            
+            pts_in_ref.append( accepted_pt_in_ref )
+            pts_in_frame.append( accepted_pt_in_frame )
+            corr_ref_ids.append( corr_ref_id )
+                
+        return corr_ref_ids, pts_in_ref, pts_in_frame
+    
+    def _cv_feature_matching(self, features, frame_ids, ref_frame_ids, match_threshold=0.75):
+        
+        corr_ref_ids = []
+        pts_in_ref = []
         pts_in_frame = []
         
         bf = cv2.BFMatcher() # Brute Force Matcher
-        
-        features_match_objects = [ ]
             
-        for feature in features_frames:
+        for frame_id, feature in zip(frame_ids, features):
+            corr_ref_id = ref_frame_ids[ np.argmin( np.abs( np.array(ref_frame_ids) - frame_id) ) ]
+            ref_feature = features[corr_ref_id - 1] # Subtracting 1 to return to 0-indexing (we saved the frame_ids using 1-indexing)
             
             # Extracting the descriptors of the frame
+            ref_descriptor = ref_feature[2:].T.astype(np.uint8)
             frame_descriptor = feature[2:].T.astype(np.uint8)
             
             # Checking for consistencies in the descriptors
-            assert map_descriptor.shape[1] == frame_descriptor.shape[1], f"Inconsistency in the size of descriptor. \nMap: {map_descriptor.shape[1]}. Frame: {frame_descriptor.shape[1]}"
+            assert ref_descriptor.shape[1] == frame_descriptor.shape[1], f"Inconsistency in the size of descriptor. \nMap: {ref_descriptor.shape[1]}. Frame: {frame_descriptor.shape[1]}"
             
-            matches = bf.knnMatch(map_descriptor, frame_descriptor, k=2) # map_descriptor is the query descriptor and frame_descriptor is the train descriptor.
+            matches = bf.knnMatch(ref_descriptor, frame_descriptor, k=2) # map_descriptor is the query descriptor and frame_descriptor is the train descriptor.
             # The knnMatch function returns the two best matches for each descriptor.
             # Hence, later we will need to filter the matches to only keep the best ones.
             
-            accepted_pt_in_map = []
+            accepted_pt_in_ref = []
             accepted_pt_in_frame = []
-            
-            accepted_matches = []
             
             for m, n in matches: # m and n are the two best matches from the frame descriptor
                 if m.distance < match_threshold * n.distance:
-                    accepted_pt_in_map.append( tuple(features_map[:2, m.queryIdx]) )
+                    accepted_pt_in_ref.append( tuple(ref_feature[:2, m.queryIdx]) )
                     accepted_pt_in_frame.append( tuple(feature[:2, m.trainIdx]) )
-                    accepted_matches.append(m)
             
-            pts_in_map.append( accepted_pt_in_map )
+            pts_in_ref.append( accepted_pt_in_ref )
             pts_in_frame.append( accepted_pt_in_frame )
-            features_match_objects.append(accepted_matches)
-        
-        return pts_in_map, pts_in_frame, features_match_objects
+            corr_ref_ids.append( corr_ref_id )
+                
+        return corr_ref_ids, pts_in_ref, pts_in_frame
+    
+    def _visualize_matching(self, video_path, pts_in_ref, pts_in_frame, corr_ref_ids, frame_ids, visualization_delay=0):
+        if self.verbose:
+            print("Visualizing the matches...", end=" ")
+
+        # Open the video file
+        video = cv2.VideoCapture(video_path)
+        assert video.isOpened(), f"Video not opened. Filepath: {video_path}"
+
+        for corr_ref_id, frame_id, pt_in_ref, pt_in_frame in zip(corr_ref_ids, frame_ids, pts_in_ref, pts_in_frame):
+            
+            video.set(cv2.CAP_PROP_POS_FRAMES, corr_ref_id - 1) # Subtracting 1 to return to 0-indexing (we saved the frame_ids using 1-indexing)
+            ret, ref_image = video.read()
+            assert ret, f"Failed to read frame at ID {corr_ref_id}"
+            
+            # Set the video to the specific frame
+            video.set(cv2.CAP_PROP_POS_FRAMES, frame_id - 1) # Subtracting 1 to return to 0-indexing (we saved the frame_ids using 1-indexing)
+
+            # Read the frame
+            ret, frame_image = video.read()
+            assert ret, f"Failed to read frame at ID {frame_id}"
+
+            # Create an image to draw on
+            height = max(ref_image.shape[0], frame_image.shape[0])
+            width = ref_image.shape[1] + frame_image.shape[1]
+            output_image = np.zeros((height, width, 3), dtype=np.uint8)
+
+            # Place the map and frame side by side in the output image
+            output_image[:ref_image.shape[0], :ref_image.shape[1]] = ref_image
+            output_image[:frame_image.shape[0], ref_image.shape[1]:] = frame_image
+
+            # Draw lines between matched points for the current frame
+            for pt_map, pt_frame in zip(pt_in_ref, pt_in_frame):
+                pt_map = (int(pt_map[0]), int(pt_map[1]))
+                pt_frame = (int(pt_frame[0] + ref_image.shape[1]), int(pt_frame[1]))
+                cv2.line(output_image, pt_map, pt_frame, color=(0, 255, 0), thickness=1)
+
+            # Show the output image
+            cv2.imshow(f"Matches - Frame {frame_id}", output_image)
+            cv2.waitKey(int(visualization_delay * 1000))
+            cv2.destroyAllWindows()
+
+        video.release()
+        cv2.destroyAllWindows()
+            
+        if self.verbose:
+            print("Successful")
 
 
 # Class for Running Solutions and Parsing Data
@@ -547,13 +675,14 @@ class ConfigParser:
             assert len(map_points) == len(frame_points), "Amount of map points and amounts of frame points are inconsistent."
             
             self.config_dict["map_dtypes"].append(dtype)
-            self.config_dict["frame_ids"].append(frame_id)
+            self.config_dict["frame_ids"].append(int(frame_id))
 
             self.config_dict["map_points"].append(map_points)
             self.config_dict["frame_points"].append(frame_points)
 
         # Parsing Other Parameters
-        self.config_dict["image_map"] = self.data_reading["image_map"][0][0]
+        if "image_map" in self.data_reading:
+            self.config_dict["image_map"] = self.data_reading["image_map"][0][0]
         
         # Parsing the Keypoint Output Path and Extension
         keypoints_out= self.data_reading["keypoints_out"][0][0].split(".")
@@ -638,7 +767,6 @@ class ConfigParser:
         
         if self.verbose:
             print("Successful")
-        
 
 
 # Function to parse arguments from Command Line
@@ -666,31 +794,24 @@ if __name__ == '__main__':
     cmd_args = parse_args() #Read arguments passed on the command line
     parser = ConfigParser(config_path = cmd_args.config_file_path, verbose=cmd_args.verbose)
 
-    # Initializing the Feature Extraction
-    feat_extract = FeatureExtraction(method="SIFT", verbose=cmd_args.verbose, visualize=cmd_args.visualize)
-    
-    # Extracting Features from Image Map
-    features = feat_extract.extract_features(parser.config_dict["image_map"], type="image")
-    
-    # Extracting Features from video files (Only One Video Accepted)
-    features_video, frame_ids = feat_extract.extract_features(parser.config_dict["videos"], type="video")
-    features.extend(features_video)
-    frame_ids = frame_ids + 1 # Adding 1 to the frame ids to account for the map frame
-    
+    # Feature Extraction
+    feat_extract = FeatureExtraction(method="SIFT", blur=True, verbose=cmd_args.verbose, visualize=cmd_args.visualize)
+    features, frame_ids = feat_extract.extract_features(parser.config_dict["videos"], # Extracting Features from video files (Only One Video Accepted)
+                                                        type="video",
+                                                        visualization_delay=1, # Visualization delay in seconds
+                                                        )
     parser.save_features(features)
-    # parser.load_features()
-
+    
     # Matching Features
     feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose, visualize=cmd_args.visualize)
-    pts_in_map, pts_in_frame = feat_match.match_features(features)
-
-    #Visualize  the matches
-    feat_match._visualize_matching(parser.config_dict["image_map"], parser.config_dict["videos"], pts_in_map, pts_in_frame)
-
-    # Computing Homography
-    homography = Homography(transforms="map", use_ransac=True, use_opencv=False, verbose=cmd_args.verbose, visualize=cmd_args.visualize)
-    homo_output_matrix = homography.compute_homography( pts_in_map, pts_in_frame, frame_ids )
+    corr_ref_ids, pts_in_ref, pts_in_frame = feat_match.match_features(features,
+                                                                       frame_ids=frame_ids,
+                                                                       ref_frame_ids=parser.config_dict["frame_ids"], # Frame IDs use 1-indexing
+                                                                       video_path=parser.config_dict["videos"],
+                                                                       visualization_delay=1)
+    
+    # Computing Homography Matrices
+    homography = Homography(transforms=parser.config_dict["transforms"], use_ransac=True, use_opencv=True, verbose=cmd_args.verbose)
+    homo_output_matrix = homography.compute_homography( pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids, parserObject=parser)
+    
     parser.save_homography_output(homo_output_matrix)
-
-    #visualize homography
-    homography.visualize_homographies(parser.config_dict["image_map"], parser.config_dict["videos"], homo_output_matrix, frame_ids)
