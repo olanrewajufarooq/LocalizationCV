@@ -1,8 +1,5 @@
 import argparse
-import pickle
-import h5py
 import numpy as np
-import PIL
 import cv2
 from scipy.io import loadmat, savemat
 from sklearn.neighbors import NearestNeighbors
@@ -42,12 +39,14 @@ class Homography:
             A.append([0, 0, 0, x_in, y_in, 1, -y_out*x_in, -y_out*y_in, -y_out])
         
         A = np.array(A,dtype=np.double)
-        eig_values , eig_vectors = np.linalg.eig(A.T @ A)
-
+        # TODO: Include the variance matrix before computing the SVD
+        eig_values , eig_vectors = np.linalg.eig(A.T @ A) # TODO: Implement the SVD instead of the eigendecomposition
         min_eig_value = np.argmin(eig_values)
         min_eig_value_index = np.unravel_index(min_eig_value, eig_values.shape)
         H_array = eig_vectors[:,min_eig_value_index].reshape(-1,1)
-
+        
+        # TODO: Use the inverse of the variance matrix to compute the actual result for the eigenvectors (Do it in the appropriate place)
+        
         return H_array / H_array[-1]
     
     # Internal function to compute homography using RANSAC
@@ -112,24 +111,21 @@ class Homography:
                     H_array, _ = cv2.findHomography(input_points,output_points,cv2.RANSAC,5.0)
                 else:
                     H_array, _ = cv2.findHomography(input_points,output_points)
+
+                H_array = H_array.reshape(-1, 1)
                 
-                H_array = H_array.reshape(-1, 1)                
-                assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
-                 # Stacking the frame id to the homography array 
-                H_output_array = np.vstack( (np.array([corr_ref_id, frame_id]).reshape(-1, 1), H_array) )
-                H_output_arrays.append(H_output_array)
             else:
                 # Computing the homography matrix without using OpenCV
                 if self.use_ransac:
                     H_array = self._run_ransac(input_points=input_points, output_points=output_points)
                 else:
                     H_array = self._compute_homography_without_cv(input_points=input_points, output_points=output_points)
-
-                assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
                 
-                # Stacking the frame id to the homography array
-                H_output_array = np.vstack( (np.array([corr_ref_id, frame_id]).reshape(-1, 1), H_array) )
-                H_output_arrays.append(H_output_array)
+            assert H_array.shape[1] == 1, f"Output should be a column array. \nGotten: {H_array}"
+            
+            # Stacking the frame id to the homography array
+            H_output_array = np.vstack( (np.array([corr_ref_id, frame_id]).reshape(-1, 1), H_array) )
+            H_output_arrays.append(H_output_array)
         
         # Stacking the homography outputs.
         H_output = np.hstack(H_output_arrays)
@@ -215,30 +211,30 @@ class Homography:
         return np.hstack(H_matrices), existing_transforms
     
     # Internal function to compute homography for all combinations of transforms (i.e. every possible frame to frame and frame to map) without repetition.
-    def _compute_homography_all_combinations(self, H_output_video_to_map, H_output_frame_to_map, frame_ids, existing_transforms):
+    def _compute_homography_all_combinations(self, H_output_video_to_map, frame_ids, existing_transforms):
         
-        for i, frame_id in enumerate(frame_ids):
-            
-            H_arrays = []
+        H_arrays = []
+        
+        for id, frame_id in enumerate(frame_ids):
             
             # Find the column in the second row of the H_output_video_to_map matrix corresponding to this frame_id
             f2m_id = np.where(H_output_video_to_map[1] == frame_id)[0][0]
             H_f2m = H_output_video_to_map[2:, f2m_id].reshape(3, 3)
             
-            if np.abs(np.linalg.det(H_f2m)) < 1e-5:
+            if np.abs(np.linalg.det(H_f2m)) < 1e-5: # Checking if the determinant of the matrix is close to zero
                 if self.verbose:
-                    print("x", end="")
-                continue
+                    print("x", end="") # Printing an "x" to indicate that the matrix is close to singular
+                continue # Skipping this iteration if the matrix is close to singular
             
             H_f2m_inv = np.linalg.inv(H_f2m)
             
-            for another_frame_id in frame_ids[i:]:
+            for another_frame_id in frame_ids[id:]:
                 if ( (frame_id, another_frame_id) in existing_transforms ) or ( (another_frame_id, frame_id) in existing_transforms ):
                     continue
                 
                 # Find the column in the second row of the H_output_frame_to_map matrix corresponding to this another_frame_id
-                af2m_id = np.where(H_output_frame_to_map[1] == another_frame_id)[0][0]
-                H_af2m = H_output_frame_to_map[2:, af2m_id].reshape(3, 3)
+                af2m_id = np.where(H_output_video_to_map[1] == another_frame_id)[0][0]
+                H_af2m = H_output_video_to_map[2:, af2m_id].reshape(3, 3)
                 
                 H_f2af = (H_f2m_inv @ H_af2m).reshape(-1, 1)
                 H_array = np.vstack( (np.array([frame_id, another_frame_id]).reshape(-1, 1), H_f2af) )
@@ -274,17 +270,19 @@ class Homography:
         
         H_output_video_to_map, existing_transforms = self._compute_homography_frame_to_map(H_output_video_to_refframe, H_output_refframe_to_map)
         
+        H_output_allframe_to_map = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
+        
         if self.verbose:
             print("Successful")
         
         if self.transforms == "map":
-            H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map) )
+            H_output = H_output_allframe_to_map
         elif self.transforms == "all":
             if self.verbose:
                 print("Computing Homography from Each Video Frame to Every Other Video Frame...", end=" ")
             
-            H_frames_to_frames = self._compute_homography_all_combinations(H_output_video_to_map, H_output_refframe_to_map, frame_ids, existing_transforms)
-            H_output = np.hstack( (H_output_video_to_map, H_output_refframe_to_map, H_output_video_to_refframe, H_frames_to_frames) )
+            H_frames_to_frames = self._compute_homography_all_combinations(H_output_allframe_to_map, frame_ids, existing_transforms)
+            H_output = np.hstack( (H_output_allframe_to_map, H_output_video_to_refframe, H_frames_to_frames) )
         
             if self.verbose:
                 print("Successful")
@@ -685,14 +683,10 @@ class ConfigParser:
             self.config_dict["image_map"] = self.data_reading["image_map"][0][0]
         
         # Parsing the Keypoint Output Path and Extension
-        keypoints_out= self.data_reading["keypoints_out"][0][0].split(".")
-        self.config_dict["keypoints_out_path"] = keypoints_out[0]
-        self.config_dict["keypoints_out_ext"] = keypoints_out[1]
+        self.config_dict["keypoints_out_path"]= self.data_reading["keypoints_out"][0][0]
         
         # Parsing the Transformation Output Path and Extension
-        transforms_out= self.data_reading["transforms_out"][0][0].split(".")
-        self.config_dict["transforms_out_path"] = transforms_out[0]
-        self.config_dict["transforms_out_ext"] = transforms_out[1]
+        self.config_dict["transforms_out_path"]= self.data_reading["transforms_out"][0][0]
 
         # Saving the specified Transformation Method
         self.config_dict["transforms"] = self.data_reading["transforms"][0][1]
@@ -700,46 +694,21 @@ class ConfigParser:
     def save_features(self, features):
         
         if self.verbose:
-            print(f"Saving features as .{self.config_dict['keypoints_out_ext']} file...", end=" ")
+            print(f"Saving features as to {self.config_dict['keypoints_out_path']} ...", end=" ")
             
         # Saving as MATLAB file
-        if self.config_dict["keypoints_out_ext"] == "mat":
-            savemat( f"{self.config_dict['keypoints_out_path']}.mat", {"features": features})
-        
-        # Saving as HDF5 file
-        elif self.config_dict["keypoints_out_ext"] == "h5":
-            with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'w') as file:
-                for frame, feature in enumerate(features):
-                    file.create_dataset(f"{frame}", data=feature)
-        
-        # Saving as Pickle file
-        elif self.config_dict["keypoints_out_ext"] == "pkl":
-            with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'wb') as file:
-                pickle.dump(features, file)
+        savemat( f"{self.config_dict['keypoints_out_path']}", {"features": features})
         
         if self.verbose:
             print("Successful")
             
     def load_features(self):
-            
+        
         if self.verbose:
             print(f"Loading features from .{self.config_dict['keypoints_out_ext']} file...", end=" ")
         
         # Loading from MATLAB file
-        if self.config_dict["keypoints_out_ext"] == "mat":
-            feats = loadmat( self.config_dict['keypoints_out_path'] )
-        
-        # Loading from HDF5 file
-        elif self.config_dict["keypoints_out_ext"] == "h5":
-            with h5py.File(f"{self.config_dict['keypoints_out_path']}.h5", 'r') as file:
-                feats = []
-                for frame in file:
-                    feats.append( file[frame][()] )
-        
-        # Loading from Pickle file
-        elif self.config_dict["keypoints_out_ext"] == "pkl":
-            with open(f"{self.config_dict['keypoints_out_path']}.pkl", 'rb') as file:
-                feats = pickle.load(file)
+        feats = loadmat( self.config_dict['keypoints_out_path'] )
         
         if self.verbose:
             print("Successful")
@@ -749,21 +718,10 @@ class ConfigParser:
     def save_homography_output(self, homo_matrix):
         
         if self.verbose:
-            print(f"Saving homography matrices as .{self.config_dict['transforms_out_ext']} file...", end=" ")
+            print(f"Saving homography matrices as {self.config_dict['transforms_out_path']}...", end=" ")
             
         # Saving as MATLAB file
-        if self.config_dict["transforms_out_ext"] == "mat":
-            savemat( f"{self.config_dict['transforms_out_path']}.mat", {"H": homo_matrix} )
-        
-        # Saving as HDF5 file
-        elif self.config_dict["transforms_out_ext"] == "h5":
-            with h5py.File(f"{self.config_dict['transforms_out_path']}.h5", 'w') as file:
-                file.create_dataset("H", data=homo_matrix)
-        
-        # Saving as Pickle file
-        elif self.config_dict["transforms_out_ext"] == "pkl":
-            with open(f"{self.config_dict['transforms_out_path']}.pkl", 'wb') as file:
-                pickle.dump(homo_matrix, file)
+        savemat( self.config_dict['transforms_out_path'], {"H": homo_matrix} )
         
         if self.verbose:
             print("Successful")

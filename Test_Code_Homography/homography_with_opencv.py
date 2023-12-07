@@ -36,7 +36,7 @@ points_array1 = np.array(points_array1, dtype=np.double)
 points_array2 = np.array(points_array2, dtype=np.double)
 
 # Find the homography matrix
-h, status = cv2.findHomography(points_array1, points_array2)
+h, status = cv2.findHomography(points_array1, points_array2, cv2.RANSAC, 5.0)
 
 
 # Load the images
