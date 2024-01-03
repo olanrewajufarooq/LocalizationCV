@@ -202,7 +202,7 @@ class Homography:
             H_v2f = H_output_video_to_refframe[2:, v2f_id].reshape(3, 3)
             H_f2m = H_output_refframe_to_map[2:, f2m_id].reshape(3, 3)
             
-            H_v2m = (H_f2m @ H_v2f).reshape(-1, 1)
+            H_v2m = np.matmul(H_f2m , H_v2f).reshape(-1, 1)
             H_array = np.vstack( (np.array([0, frame_id]).reshape(-1, 1), H_v2m) )
             
             H_matrices.append(H_array)
@@ -749,11 +749,14 @@ def parse_args():
     return parser.parse_args()
 
 if __name__ == '__main__':
-    cmd_args = parse_args() #Read arguments passed on the command line
-    parser = ConfigParser(config_path = cmd_args.config_file_path, verbose=cmd_args.verbose)
+    verbose = True
+    visualize = False
+    config_path = "myconfig.cfg"
+    
+    parser = ConfigParser(config_path = config_path, verbose=verbose)
 
     # Feature Extraction
-    feat_extract = FeatureExtraction(method="SIFT", blur=True, verbose=cmd_args.verbose, visualize=cmd_args.visualize)
+    feat_extract = FeatureExtraction(method="SIFT", blur=True, verbose=verbose, visualize=visualize)
     features, frame_ids = feat_extract.extract_features(parser.config_dict["videos"], # Extracting Features from video files (Only One Video Accepted)
                                                         type="video",
                                                         visualization_delay=1, # Visualization delay in seconds
@@ -761,7 +764,7 @@ if __name__ == '__main__':
     parser.save_features(features)
     
     # Matching Features
-    feat_match = FeatureMatching(lib="sklearn", verbose=cmd_args.verbose, visualize=cmd_args.visualize)
+    feat_match = FeatureMatching(lib="sklearn", verbose=verbose, visualize=visualize)
     corr_ref_ids, pts_in_ref, pts_in_frame = feat_match.match_features(features,
                                                                        frame_ids=frame_ids,
                                                                        ref_frame_ids=parser.config_dict["frame_ids"], # Frame IDs use 1-indexing
@@ -769,7 +772,7 @@ if __name__ == '__main__':
                                                                        visualization_delay=1)
     
     # Computing Homography Matrices
-    homography = Homography(transforms=parser.config_dict["transforms"], use_ransac=True, use_opencv=True, verbose=cmd_args.verbose)
+    homography = Homography(transforms=parser.config_dict["transforms"], use_ransac=True, use_opencv=True, verbose=verbose)
     homo_output_matrix = homography.compute_homography( pts_in_ref, pts_in_frame, frame_ids, corr_ref_ids, parserObject=parser)
     
     parser.save_homography_output(homo_output_matrix)
